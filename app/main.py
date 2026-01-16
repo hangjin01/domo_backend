@@ -5,6 +5,10 @@ from app.database import create_db_and_tables
 import time
 import asyncio
 
+#routers
+from app.routers import auth
+
+
 try:
     from vectorwave import initialize_database, generate_and_register_metadata
 except ImportError:
@@ -63,6 +67,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+#routers
+app.include_router(auth.router, prefix="/api/auth")
 
 
 @app.get("/")
