@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+sqlmodel
+psycopg2-binary
+asyncpg
+python-multipart
+requests
+openai
+weaviate-client>=4.0.0
+vectorwave
+bcrypt
