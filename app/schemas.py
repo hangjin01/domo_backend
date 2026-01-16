@@ -22,3 +22,26 @@ class UserResponse(BaseModel):
     name: str
     is_student_verified: bool
     profile_image: Optional[str] = None
+
+
+class WorkspaceCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
+class WorkspaceResponse(BaseModel):
+    id: int
+    name: str
+    owner_id: int
+    description: Optional[str] = None
+
+
+class ProjectCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
+class ProjectResponse(BaseModel):
+    id: int
+    name: str
+    workspace_id: int

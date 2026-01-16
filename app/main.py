@@ -6,7 +6,7 @@ import time
 import asyncio
 
 #routers
-from app.routers import auth
+from app.routers import auth,workspace
 
 
 try:
@@ -70,6 +70,7 @@ app = FastAPI(
 
 #routers
 app.include_router(auth.router, prefix="/api/auth")
+app.include_router(workspace.router, prefix="/api")
 
 
 @app.get("/")
