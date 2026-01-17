@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional
 from datetime import time as dt_time, datetime
+from typing import Optional, List
 
 
 # data for register
@@ -64,22 +64,33 @@ class CardCreate(BaseModel):
     title: str
     content: Optional[str] = None
     order: Optional[int] = 0
-
-
-class CardResponse(BaseModel):
-    id: int
-    title: str
-    content: Optional[str] = None
-    order: int
-    column_id: int
-    assignee_id: Optional[int] = None
-
+    x: Optional[float] = 0.0
+    y: Optional[float] = 0.0
+    assignee_ids: List[int] = [] # 👈 여러 명의 ID를 리스트로 받음
 
 class CardUpdate(BaseModel):
     title: Optional[str] = None
     content: Optional[str] = None
     column_id: Optional[int] = None
     order: Optional[int] = None
+    x: Optional[float] = None
+    y: Optional[float] = None
+    assignee_ids: Optional[List[int]] = None # 👈 수정 시에도 리스트로 받음
+
+# 2. 카드 응답 스키마 변경
+class CardResponse(BaseModel):
+    id: int
+    title: str
+    content: Optional[str] = None
+    order: int
+    column_id: int
+    x: float
+    y: float
+    created_at: datetime
+    updated_at: datetime
+
+    # ✅ 담당자들의 상세 정보를 리스트로 반환
+    assignees: List[UserResponse] = []
 
 
 class ScheduleCreate(BaseModel):
