@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr
 from typing import Optional
-from datetime import time as dt_time
+from datetime import time as dt_time, datetime
 
 
 # data for register
@@ -112,7 +112,25 @@ class WorkspaceMemberResponse(BaseModel):
     user_id: int
     name: str
     email: EmailStr
-    role: str # admin 또는 member
+    role: str  # admin 또는 member
 
     class Config:
         from_attributes = True
+
+
+class FileVersionResponse(BaseModel):
+    id: int
+    version: int
+    file_size: int
+    created_at: datetime
+    uploader_id: int
+
+
+class FileResponse(BaseModel):
+    id: int
+    project_id: int
+    filename: str
+    owner_id: int
+    created_at: datetime
+    # 가장 최신 버전을 보여주기 위해
+    latest_version: Optional[FileVersionResponse] = None

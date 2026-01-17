@@ -15,6 +15,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     volumes:
       - ./app:/app/app
+      - ./uploads:/app/uploads
     depends_on:
       - db
       - weaviate
