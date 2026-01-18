@@ -61,6 +61,17 @@ def delete_personal_schedule(
 
     return {"message": "개인 일정이 삭제되었습니다."}
 
+@router.get("/schedules/me", response_model=List[ScheduleResponse])
+def get_my_schedules(
+        user_id: int = Depends(get_current_user_id),
+        db: Session = Depends(get_db)
+):
+    """
+    내가 등록한 개인 시간표(수업 등) 목록을 조회합니다.
+    """
+    schedules = db.exec(select(Schedule).where(Schedule.user_id == user_id)).all()
+    return schedules
+
 
 # 2. 특정 워크스페이스 팀원들의 공통 빈 시간 계산 (핵심!)
 @router.get("/workspaces/{workspace_id}/free-time", response_model=List[FreeTimeSlot])
