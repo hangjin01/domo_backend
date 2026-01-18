@@ -16,6 +16,7 @@ from app.utils.logger import log_activity
 from app.models.workspace import Project
 from app.models.user import User
 from app.models.board import CardFileLink
+from vectorwave import *
 
 router = APIRouter(tags=["File Management"])
 
@@ -27,6 +28,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # 1. 파일 업로드 (자동 버전 관리)
 @router.post("/projects/{project_id}/files", response_model=FileResponse)
+@vectorize(search_description="Upload file", capture_return_value=True, replay=True) # 👈 추가
 async def upload_file(
         project_id: int,
         file: UploadFile = File(...),
@@ -132,6 +134,7 @@ async def upload_file(
 
 # 2. 파일 다운로드 (특정 버전)
 @router.get("/files/download/{version_id}")
+@vectorize(search_description="Download file version", capture_return_value=False, replay=True)
 def download_file_version(version_id: int, db: Session = Depends(get_db)):
     version = db.get(FileVersion, version_id)
     if not version:
@@ -148,6 +151,7 @@ def download_file_version(version_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/files/{file_id}/versions", response_model=List[FileVersionResponse])
+@vectorize(search_description="Get file version history", capture_return_value=True, replay=True) # 👈 추가
 def get_file_history(
         file_id: int,
         db: Session = Depends(get_db)
@@ -167,6 +171,7 @@ def get_file_history(
     return versions
 
 @router.delete("/files/{file_id}")
+@vectorize(search_description="Delete file", capture_return_value=True, replay=True) # 👈 추가
 def delete_file(
         file_id: int,
         user_id: int = Depends(get_current_user_id),

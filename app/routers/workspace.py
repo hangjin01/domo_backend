@@ -13,11 +13,13 @@ from app.schemas import InvitationCreate, InvitationResponse, InvitationInfo
 from datetime import datetime, timedelta
 from typing import Any
 from app.utils.logger import log_activity
+from vectorwave import *
 
 router = APIRouter(tags=["Workspace & Project"])
 
 # 쿠키에서 세션 ID를 추출하여 유저 ID 반환하는 의존성 함수
 from fastapi import Cookie
+
 
 def get_current_user_id(session_id: str = Cookie(None), db: Session = Depends(get_db)):
     if not session_id:
@@ -38,6 +40,7 @@ def get_current_user_id(session_id: str = Cookie(None), db: Session = Depends(ge
 
 # 1. 워크스페이스 생성 (팀 만들기)
 @router.post("/workspaces", response_model=WorkspaceResponse)
+@vectorize(search_description="Create workspace", capture_return_value=True, replay=True)  # 👈 추가
 def create_workspace(
         ws_data: WorkspaceCreate,
         user_id: int = Depends(get_current_user_id),
@@ -69,8 +72,10 @@ def create_workspace(
 
     return new_ws
 
+
 # 2. 내 워크스페이스 목록 조회
 @router.get("/workspaces", response_model=List[WorkspaceResponse])
+@vectorize(search_description="List my workspaces", capture_return_value=True, replay=True)  # 👈 추가
 def get_my_workspaces(
         user_id: int = Depends(get_current_user_id),
         db: Session = Depends(get_db)
@@ -84,8 +89,10 @@ def get_my_workspaces(
     results = db.exec(statement).all()
     return results
 
+
 # 3. 프로젝트 생성 (워크스페이스 안에)
 @router.post("/workspaces/{workspace_id}/projects", response_model=ProjectResponse)
+@vectorize(search_description="Create project", capture_return_value=True, replay=True) # 👈 추가
 def create_project(
         workspace_id: int,
         project_data: ProjectCreate,
@@ -117,7 +124,9 @@ def create_project(
 
     return new_project
 
+
 @router.get("/workspaces/{workspace_id}/projects", response_model=List[ProjectResponse])
+@vectorize(search_description="List workspace projects", capture_return_value=True, replay=True) # 👈 추가
 def get_workspace_projects(
         workspace_id: int,
         user_id: int = Depends(get_current_user_id),
@@ -132,10 +141,12 @@ def get_workspace_projects(
     projects = db.exec(select(Project).where(Project.workspace_id == workspace_id)).all()
     return projects
 
+
 # app/routers/workspace.py 맨 아래에 추가
 
 # 5. 워크스페이스에 팀원 초대 (이메일로 추가)
 @router.post("/workspaces/{workspace_id}/members")
+@vectorize(search_description="Add member manually", capture_return_value=True, replay=True) # 👈 추가
 def add_workspace_member(
         workspace_id: int,
         request: AddMemberRequest,
@@ -183,6 +194,7 @@ def add_workspace_member(
 
 # 6. 워크스페이스 전체 멤버 목록 조회
 @router.get("/workspaces/{workspace_id}/members", response_model=List[WorkspaceMemberResponse])
+@vectorize(search_description="List workspace members", capture_return_value=True, replay=True) # 👈 추가
 def get_workspace_members(
         workspace_id: int,
         user_id: int = Depends(get_current_user_id),
@@ -215,6 +227,7 @@ def get_workspace_members(
 
 
 @router.get("/workspaces/{workspace_id}/online-members", response_model=List[UserResponse])
+@vectorize(search_description="Get online members", capture_return_value=True, replay=True) # 👈 추가
 def get_online_members(
         workspace_id: int,
         user_id: int = Depends(get_current_user_id),
@@ -232,7 +245,7 @@ def get_online_members(
         select(User)
         .join(WorkspaceMember, User.id == WorkspaceMember.user_id)
         .where(WorkspaceMember.workspace_id == workspace_id)
-        .where(User.last_active_at >= active_threshold) # 👈 핵심 조건
+        .where(User.last_active_at >= active_threshold)  # 👈 핵심 조건
     )
 
     online_users = db.exec(statement).all()
@@ -241,6 +254,7 @@ def get_online_members(
 
 
 @router.post("/workspaces/{workspace_id}/invitations", response_model=InvitationResponse)
+@vectorize(search_description="Generate invitation link", capture_return_value=True, replay=True) # 👈 추가
 def create_invitation(
         workspace_id: int,
         invite_data: InvitationCreate,
@@ -268,7 +282,7 @@ def create_invitation(
     db.commit()
 
     # 3. 프론트엔드 URL 생성 (환경변수로 도메인 관리 추천)
-    base_url = "http://localhost:8000" # 실제 배포 시 변경 필요
+    base_url = "http://localhost:8000"  # 실제 배포 시 변경 필요
     invite_link = f"{base_url}/invite/{token}"
 
     return InvitationResponse(invite_link=invite_link, expires_at=expires_at)
@@ -276,6 +290,7 @@ def create_invitation(
 
 # 9. [신규] 초대 링크 수락하기
 @router.post("/invitations/{token}/accept")
+@vectorize(search_description="Accept invitation", capture_return_value=True, replay=True) # 👈 추가
 def accept_invitation(
         token: str,
         user_id: int = Depends(get_current_user_id),

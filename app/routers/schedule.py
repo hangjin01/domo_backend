@@ -10,7 +10,7 @@ from app.models.workspace import WorkspaceMember
 from app.models.user import User
 from app.schemas import ScheduleCreate, ScheduleResponse, FreeTimeSlot
 from app.utils.logger import log_activity
-
+from vectorwave import *
 
 
 
@@ -18,6 +18,7 @@ router = APIRouter(tags=["Schedule & Free Time"])
 
 # 1. 내 시간표 등록 (수업 추가)
 @router.post("/schedules", response_model=ScheduleResponse)
+@vectorize(search_description="Create a personal schedule", capture_return_value=True, replay=True)
 def add_schedule(s_data: ScheduleCreate,
                  user_id: int = Depends(get_current_user_id),
                  db: Session = Depends(get_db)):

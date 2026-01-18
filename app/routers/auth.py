@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 from sqlmodel import Session, select
 from datetime import datetime, timedelta
 import bcrypt
+from vectorwave import *
 
 from app.database import get_db
 from app.models.user import User
@@ -27,6 +28,7 @@ def generate_code(length=6):
 
 # --- 1. 회원가입 (1단계: 정보 등록 & 메일 발송) ---
 @router.post("/signup", response_model=UserResponse)
+@vectorize(search_description="User signup request", capture_return_value=True, replay=True)
 async def signup(
         user_data: UserCreate,
         background_tasks: BackgroundTasks, # 👈 비동기 메일 발송용
@@ -65,6 +67,7 @@ async def signup(
 
 # --- 2. 이메일 인증 코드 확인 (2단계) ---
 @router.post("/verify")
+@vectorize(search_description="Verify email code", capture_return_value=True, replay=True) # 👈 추가
 def verify_email(req: VerificationRequest, db: Session = Depends(get_db)):
     # 1. 인증 코드 조회
     verification = db.get(EmailVerification, req.email)
@@ -88,6 +91,7 @@ def verify_email(req: VerificationRequest, db: Session = Depends(get_db)):
 
 # --- 3. 로그인 API (인증 여부 체크 추가) ---
 @router.post("/login")
+@vectorize(search_description="User login", capture_return_value=True, replay=True) # 👈 추가
 def login(response: Response, login_data: UserLogin, db: Session = Depends(get_db)):
     user = db.exec(select(User).where(User.email == login_data.email)).first()
 
@@ -119,6 +123,7 @@ def login(response: Response, login_data: UserLogin, db: Session = Depends(get_d
 
 # --- 4. 로그아웃 API ---
 @router.post("/logout")
+@vectorize(search_description="User logout", capture_return_value=True, replay=True) # 👈 추가
 def logout(response: Response, request: Request, db: Session = Depends(get_db)):
     session_id = request.cookies.get("session_id")
     if session_id:

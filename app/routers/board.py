@@ -13,6 +13,7 @@ from app.models.workspace import Project
 from app.models.file import FileMetadata
 from app.models.board import CardFileLink
 from app.schemas import FileResponse
+from vectorwave import *
 
 
 router = APIRouter(tags=["Board & Cards"])
@@ -20,6 +21,7 @@ router = APIRouter(tags=["Board & Cards"])
 
 # 1. 컬럼 생성
 @router.post("/projects/{project_id}/columns", response_model=BoardColumnResponse)
+@vectorize(search_description="Create board column", capture_return_value=True, replay=True) # 👈 추가
 def create_column(project_id: int, col_data: BoardColumnCreate, user_id: int = Depends(get_current_user_id),
                   db: Session = Depends(get_db)):
     project = db.get(Project, project_id)
@@ -49,6 +51,7 @@ def create_column(project_id: int, col_data: BoardColumnCreate, user_id: int = D
 
 # 2. 카드 생성
 @router.post("/columns/{column_id}/cards", response_model=CardResponse)
+@vectorize(search_description="Create card", capture_return_value=True, replay=True) # 👈 추가
 def create_card(
         column_id: int,
         card_data: CardCreate,
@@ -97,6 +100,7 @@ def create_card(
 
 # 3. 특정 프로젝트의 모든 컬럼 및 카드 조회
 @router.get("/projects/{project_id}/board")
+@vectorize(search_description="Get project kanban board", capture_return_value=True, replay=True) # 👈 추가
 def get_board(project_id: int, db: Session = Depends(get_db)):
     columns = db.exec(select(BoardColumn).where(BoardColumn.project_id == project_id).order_by(BoardColumn.order)).all()
     result = []
@@ -110,6 +114,7 @@ def get_board(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/cards/{card_id}", response_model=CardResponse)
+@vectorize(search_description="Update card", capture_return_value=True, replay=True) # 👈 추가
 def update_card(
         card_id: int,
         card_data: CardUpdate,
@@ -140,6 +145,7 @@ def update_card(
 
 
 @router.post("/cards/{card_id}/files/{file_id}", response_model=CardResponse)
+@vectorize(search_description="Attach file to card", capture_return_value=True, replay=True) # 👈 추가
 def attach_file_to_card(
         card_id: int,
         file_id: int,
@@ -184,6 +190,7 @@ def attach_file_to_card(
 
 # 5. [신규] 카드에서 파일 연결 해제
 @router.delete("/cards/{card_id}/files/{file_id}")
+@vectorize(search_description="Detach file from card", capture_return_value=True, replay=True) # 👈 추가
 def detach_file_from_card(
         card_id: int,
         file_id: int,
@@ -216,6 +223,7 @@ def detach_file_from_card(
 
 
 @router.get("/cards/{card_id}", response_model=CardResponse)
+@vectorize(search_description="Get card details", capture_return_value=True, replay=True) # 👈 추가
 def get_card(
         card_id: int,
         db: Session = Depends(get_db)
