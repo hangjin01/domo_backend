@@ -52,5 +52,8 @@ class Card(SQLModel, table=True):
     x: float = Field(default=0.0)
     y: float = Field(default=0.0)
 
+    start_date: Optional[datetime] = Field(default=None)
+    due_date: Optional[datetime] = Field(default=None)
+
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)

@@ -67,7 +67,9 @@ class CardCreate(BaseModel):
     order: Optional[int] = 0
     x: Optional[float] = 0.0
     y: Optional[float] = 0.0
-    assignee_ids: List[int] = []  # 👈 여러 명의 ID를 리스트로 받음
+    assignee_ids: List[int] = []
+    start_date: Optional[datetime] = None
+    due_date: Optional[datetime] = None
 
 
 class CardUpdate(BaseModel):
@@ -77,7 +79,9 @@ class CardUpdate(BaseModel):
     order: Optional[int] = None
     x: Optional[float] = None
     y: Optional[float] = None
-    assignee_ids: Optional[List[int]] = None  # 👈 수정 시에도 리스트로 받음
+    assignee_ids: Optional[List[int]] = None
+    start_date: Optional[datetime] = None
+    due_date: Optional[datetime] = None
 
 
 # 2. 카드 응답 스키마 변경
@@ -148,9 +152,10 @@ class CardResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    # ✅ 담당자들의 상세 정보를 리스트로 반환
     assignees: List[UserResponse] = []
     files: List[FileResponse] = []
+    start_date: Optional[datetime] = None
+    due_date: Optional[datetime] = None
 
 
 class VerificationRequest(BaseModel):
