@@ -7,7 +7,7 @@ from sqlmodel import Session, select
 from app.database import get_db
 from app.routers.workspace import get_current_user_id
 from app.models.user import User
-from app.schemas import UserResponse
+from app.schemas import UserResponse, UserUpdate
 from vectorwave import vectorize  # 로그/추적용 (선택 사항)
 
 router = APIRouter(tags=["User"])
@@ -60,4 +60,24 @@ def get_my_info(
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+@router.patch("/users/me", response_model=UserResponse)
+@vectorize(search_description="Update user name", capture_return_value=True)
+def update_my_info(
+        user_data: UserUpdate,
+        user_id: int = Depends(get_current_user_id),
+        db: Session = Depends(get_db)
+):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user_data.name is not None:
+        user.name = user_data.name
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
     return user

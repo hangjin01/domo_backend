@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from app.utils.logger import log_activity
 from vectorwave import *
+from app.schemas import WorkspaceUpdate, ProjectUpdate
 
 router = APIRouter(tags=["Workspace & Project"])
 
@@ -410,3 +411,65 @@ def remove_workspace_member(
 
     action = "탈퇴" if user_id == target_user_id else "강퇴"
     return {"message": f"멤버가 성공적으로 {action}처리 되었습니다."}
+
+@router.patch("/workspaces/{workspace_id}", response_model=WorkspaceResponse)
+@vectorize(search_description="Update workspace info", capture_return_value=True)
+def update_workspace(
+        workspace_id: int,
+        ws_data: WorkspaceUpdate,
+        user_id: int = Depends(get_current_user_id),
+        db: Session = Depends(get_db)
+):
+    # 1. 워크스페이스 조회
+    workspace = db.get(Workspace, workspace_id)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    # 2. 권한 확인 (소유자만 수정 가능)
+    if workspace.owner_id != user_id:
+        raise HTTPException(status_code=403, detail="워크스페이스 소유자만 정보를 수정할 수 있습니다.")
+
+    # 3. 데이터 업데이트 (입력된 값만 변경)
+    if ws_data.name is not None:
+        workspace.name = ws_data.name
+    if ws_data.description is not None:
+        workspace.description = ws_data.description
+
+    db.add(workspace)
+    db.commit()
+    db.refresh(workspace)
+
+    return workspace
+
+
+# 2. 프로젝트 정보 수정
+@router.patch("/projects/{project_id}", response_model=ProjectResponse)
+@vectorize(search_description="Update project info", capture_return_value=True)
+def update_project(
+        project_id: int,
+        project_data: ProjectUpdate,
+        user_id: int = Depends(get_current_user_id),
+        db: Session = Depends(get_db)
+):
+    # 1. 프로젝트 조회
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # 2. 권한 확인 (워크스페이스 관리자만 수정 가능)
+    #    (프로젝트는 별도 소유자가 없으므로, 워크스페이스 관리자 권한을 확인합니다.)
+    membership = db.get(WorkspaceMember, (project.workspace_id, user_id))
+    if not membership or membership.role != "admin":
+        raise HTTPException(status_code=403, detail="워크스페이스 관리자만 프로젝트 정보를 수정할 수 있습니다.")
+
+    # 3. 데이터 업데이트
+    if project_data.name is not None:
+        project.name = project_data.name
+    if project_data.description is not None:
+        project.description = project_data.description
+
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+
+    return project

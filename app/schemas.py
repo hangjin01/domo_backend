@@ -274,3 +274,31 @@ class ChatMessageResponse(BaseModel):
     content: str
     created_at: datetime
     user: Optional[UserResponse] = None
+
+
+class WorkspaceUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+
+
+class ScheduleUpdate(BaseModel):
+    day_of_week: Optional[int] = None
+    start_time: Optional[dt_time] = None
+    end_time: Optional[dt_time] = None
+    description: Optional[str] = None
+
+
+class ProjectEventUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    start_datetime: Optional[datetime] = None
+    end_datetime: Optional[datetime] = None

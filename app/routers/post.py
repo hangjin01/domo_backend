@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 from typing import List
 from vectorwave import vectorize
-
+from datetime import datetime
 from app.database import get_db
 from app.routers.workspace import get_current_user_id
 from app.models.post import Post, PostComment
@@ -90,3 +90,35 @@ def delete_post_comment(
     db.delete(comment)
     db.commit()
     return {"message": "댓글이 삭제되었습니다."}
+
+@router.patch("/posts/{post_id}", response_model=PostResponse)
+@vectorize(search_description="Update post", capture_return_value=True)
+def update_post(
+        post_id: int,
+        post_data: PostUpdate,
+        user_id: int = Depends(get_current_user_id),
+        db: Session = Depends(get_db)
+):
+    # 1. 게시글 조회
+    post = db.get(Post, post_id)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    # 2. 권한 확인 (작성자만 수정 가능)
+    if post.user_id != user_id:
+        raise HTTPException(status_code=403, detail="작성자만 수정할 수 있습니다.")
+
+    # 3. 데이터 업데이트
+    if post_data.title is not None:
+        post.title = post_data.title
+    if post_data.content is not None:
+        post.content = post_data.content
+
+    # 수정 시간 갱신
+    post.updated_at = datetime.now()
+
+    db.add(post)
+    db.commit()
+    db.refresh(post)
+
+    return post

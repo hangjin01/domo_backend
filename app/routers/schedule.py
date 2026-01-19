@@ -8,7 +8,8 @@ from app.routers.workspace import get_current_user_id
 from app.models.schedule import Schedule, ProjectEvent
 from app.models.workspace import WorkspaceMember
 from app.models.user import User
-from app.schemas import ScheduleCreate, ScheduleResponse, FreeTimeSlot, ProjectEventCreate, ProjectEventResponse
+from app.schemas import ScheduleCreate, ScheduleResponse, FreeTimeSlot, ProjectEventCreate, ProjectEventResponse, \
+    ProjectEventUpdate, ScheduleUpdate
 from app.utils.logger import log_activity
 from app.models.workspace import Project
 from vectorwave import *
@@ -190,3 +191,65 @@ def delete_project_event(
     db.commit()
 
     return {"message": "일정이 삭제되었습니다."}
+
+@router.patch("/schedules/{schedule_id}", response_model=ScheduleResponse)
+@vectorize(search_description="Update personal schedule", capture_return_value=True)
+def update_personal_schedule(
+        schedule_id: int,
+        schedule_data: ScheduleUpdate,
+        user_id: int = Depends(get_current_user_id),
+        db: Session = Depends(get_db)
+):
+    schedule = db.get(Schedule, schedule_id)
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    if schedule.user_id != user_id:
+        raise HTTPException(status_code=403, detail="본인의 일정만 수정할 수 있습니다.")
+
+    # 입력된 값만 업데이트
+    if schedule_data.day_of_week is not None:
+        schedule.day_of_week = schedule_data.day_of_week
+    if schedule_data.start_time is not None:
+        schedule.start_time = schedule_data.start_time
+    if schedule_data.end_time is not None:
+        schedule.end_time = schedule_data.end_time
+    if schedule_data.description is not None:
+        schedule.description = schedule_data.description
+
+    db.add(schedule)
+    db.commit()
+    db.refresh(schedule)
+    return schedule
+
+
+# 2. 프로젝트 일정 수정 (예: 회의 시간 변경)
+@router.patch("/projects/events/{event_id}", response_model=ProjectEventResponse)
+@vectorize(search_description="Update project event", capture_return_value=True)
+def update_project_event(
+        event_id: int,
+        event_data: ProjectEventUpdate,
+        user_id: int = Depends(get_current_user_id),
+        db: Session = Depends(get_db)
+):
+    event = db.get(ProjectEvent, event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    # 권한 확인 (생성자만 수정 가능, 필요시 관리자도 가능하게 변경 가능)
+    if event.created_by != user_id:
+        raise HTTPException(status_code=403, detail="일정을 등록한 사람만 수정할 수 있습니다.")
+
+    if event_data.title is not None:
+        event.title = event_data.title
+    if event_data.description is not None:
+        event.description = event_data.description
+    if event_data.start_datetime is not None:
+        event.start_datetime = event_data.start_datetime
+    if event_data.end_datetime is not None:
+        event.end_datetime = event_data.end_datetime
+
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return event
