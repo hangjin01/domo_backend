@@ -44,7 +44,6 @@ class Card(SQLModel, table=True):
     title: str
     content: Optional[str] = None
     order: int = Field(default=0)  # 컬럼 내에서의 카드 순서
-
     column_id: int = Field(foreign_key="board_columns.id", index=True)
     assignees: List[User] = Relationship(link_model=CardAssignee)
     files: List["FileMetadata"] = Relationship(link_model=CardFileLink, back_populates="cards")
