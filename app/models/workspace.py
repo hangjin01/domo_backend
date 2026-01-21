@@ -58,3 +58,4 @@ class Project(SQLModel, table=True):
                                                 sa_relationship_kwargs={"cascade": "all, delete"})
     files: List["FileMetadata"] = Relationship(back_populates="project",
                                                sa_relationship_kwargs={"cascade": "all, delete"})
+    cards: List["Card"] = Relationship(back_populates="project", sa_relationship_kwargs={"cascade": "all, delete"})

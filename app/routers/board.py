@@ -50,31 +50,46 @@ def create_column(project_id: int, col_data: BoardColumnCreate, user_id: int = D
     return new_col
 
 
-# 2. 카드 생성
-@router.post("/columns/{column_id}/cards", response_model=CardResponse)
-@vectorize(search_description="Create card", capture_return_value=True, replay=True)  # 👈 추가
+@router.post("/projects/{project_id}/cards", response_model=CardResponse)
+@vectorize(search_description="Create card in project", capture_return_value=True, replay=True)
 def create_card(
-        column_id: int,
+        project_id: int,
         card_data: CardCreate,
         user_id: int = Depends(get_current_user_id),
         db: Session = Depends(get_db)
 ):
-    # 컬럼 확인
-    column = db.get(BoardColumn, column_id)
-    if not column:
-        raise HTTPException(status_code=404, detail="컬럼을 찾을 수 없습니다.")
+    # 1. 프로젝트 확인
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다.")
 
-    # 카드 생성
+    # ✅ [수정 포인트 1] 0이나 빈 값이 들어오면 None으로 변환 (이게 핵심!)
+    # (Python에서 0은 False로 취급되므로, 이 조건문 하나로 0과 None을 모두 처리할 수 있습니다.)
+    final_column_id = card_data.column_id if card_data.column_id else None
+
+    # 2. 컬럼 ID가 유효한 값(1 이상)일 때만 DB 조회 및 검사
+    if final_column_id:
+        column = db.get(BoardColumn, final_column_id)
+        if not column:
+            raise HTTPException(status_code=404, detail="지정된 컬럼을 찾을 수 없습니다.")
+        if column.project_id != project_id:
+            raise HTTPException(status_code=400, detail="해당 컬럼은 이 프로젝트에 속하지 않습니다.")
+
+    # 3. 카드 생성
     new_card = Card(
         title=card_data.title,
         content=card_data.content,
+        project_id=project_id,
+        column_id=final_column_id,  # ✅ [수정 포인트 2] 변환된 값(None) 사용
         order=card_data.order,
-        column_id=column_id,
         x=card_data.x,
-        y=card_data.y
+        y=card_data.y,
+        card_type=card_data.card_type,
+        start_date=card_data.start_date,
+        due_date=card_data.due_date
     )
 
-    # 담당자 연결 (Many-to-Many)
+    # 담당자 연결
     if card_data.assignee_ids:
         users = db.exec(select(User).where(User.id.in_(card_data.assignee_ids))).all()
         new_card.assignees = users
@@ -83,17 +98,22 @@ def create_card(
     db.commit()
     db.refresh(new_card)
 
+    # 로그 기록
     user = db.get(User, user_id)
-    # Column -> Project -> Workspace 역추적
-    column = db.get(BoardColumn, column_id)
-    project = db.get(Project, column.project_id)
+    location = f"'{project.name}' 프로젝트"
+    if final_column_id: # column_id 대신 final_column_id 체크
+        # column 변수가 위 if문 스코프 안에 있으므로 다시 조회하거나 로직 조정 필요
+        # 간단하게 다시 조회
+        col = db.get(BoardColumn, final_column_id)
+        if col:
+            location += f"의 '{col.title}' 컬럼"
 
     log_activity(
         db=db,
         user_id=user_id,
         workspace_id=project.workspace_id,
         action_type="CREATE",
-        content=f"📝 '{user.name}'님이 '{project.name}'에 카드 '{new_card.title}'을(를) 생성했습니다."
+        content=f"📝 '{user.name}'님이 {location}에 카드 '{new_card.title}'을(를) 생성했습니다."
     )
 
     return new_card
@@ -112,6 +132,24 @@ def get_board(project_id: int, db: Session = Depends(get_db)):
             "cards": cards
         })
     return result
+
+@router.get("/projects/{project_id}/cards", response_model=List[CardResponse])
+@vectorize(search_description="Get all cards in project", capture_return_value=True, replay=True)
+def get_project_cards(
+        project_id: int,
+        db: Session = Depends(get_db)
+):
+    """
+    특정 프로젝트에 속한 '모든 카드'를 조회합니다.
+    (칸반 컬럼에 있는 카드 + 컬럼 없는 백로그/화이트보드 카드 모두 포함)
+    """
+    cards = db.exec(
+        select(Card)
+        .where(Card.project_id == project_id)
+        .order_by(Card.id) # 또는 order_by(Card.order)
+    ).all()
+
+    return cards
 
 
 @router.get("/projects/{project_id}/columns", response_model=List[BoardColumnResponse])

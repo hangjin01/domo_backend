@@ -45,29 +45,34 @@ class BoardColumn(SQLModel, table=True):
     cards: List["Card"] = Relationship(back_populates="column", sa_relationship_kwargs={"cascade": "all, delete"})
 
 
-# 2. 카드 (실제 할 일 / 포스트잇)
 class Card(SQLModel, table=True):
     __tablename__ = "cards"
 
     id: Optional[int] = Field(default=None, primary_key=True)
     title: str
     content: Optional[str] = None
-    order: int = Field(default=0)  # 컬럼 내에서의 카드 순서
-    column_id: int = Field(foreign_key="board_columns.id", index=True)
+    order: int = Field(default=0)
+
+    # 🚨 [핵심 변경] column_id를 Optional(선택)로 변경
+    column_id: Optional[int] = Field(default=None, foreign_key="board_columns.id", index=True)
+
+    # ✅ [신규] 카드가 프로젝트에 직접 소속됨
+    project_id: int = Field(foreign_key="projects.id", index=True)
+
+    # ... (assignees, files, x, y 등 기존 필드 유지) ...
     assignees: List[User] = Relationship(link_model=CardAssignee)
     files: List["FileMetadata"] = Relationship(link_model=CardFileLink, back_populates="cards")
     card_type: str = Field(default="task")
-
     x: float = Field(default=0.0)
     y: float = Field(default=0.0)
-
     start_date: Optional[datetime] = Field(default=None)
     due_date: Optional[datetime] = Field(default=None)
-
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
 
-    column: Optional[BoardColumn] = Relationship(back_populates="cards")
+    # 관계 설정
+    column: Optional["BoardColumn"] = Relationship(back_populates="cards")
+    project: "Project" = Relationship(back_populates="cards") # 👈 프로젝트와 연결
     comments: List["CardComment"] = Relationship(back_populates="card", sa_relationship_kwargs={"cascade": "all, delete"})
 
 

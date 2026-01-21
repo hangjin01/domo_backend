@@ -64,6 +64,7 @@ class BoardColumnResponse(BaseModel):
 class CardCreate(BaseModel):
     title: str
     content: Optional[str] = None
+    column_id: Optional[int] = None
     order: Optional[int] = 0
     x: Optional[float] = 0.0
     y: Optional[float] = 0.0
@@ -169,7 +170,7 @@ class CardResponse(BaseModel):
     y: float
     created_at: datetime
     updated_at: datetime
-
+    column_id: Optional[int] = None
     assignees: List[UserResponse] = []
     files: List[FileResponse] = []
     start_date: Optional[datetime] = None
