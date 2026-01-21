@@ -8,6 +8,7 @@ requests
 openai
 weaviate-client>=4.0.0
 vectorwave
-bcrypt
+bcrypt==3.2.0
 email-validator
 fastapi-mail
+passlib[bcrypt]

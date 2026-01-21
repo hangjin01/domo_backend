@@ -54,10 +54,7 @@ class BoardColumn(SQLModel, table=True):
     # 계층 구조 (중첩 그룹 지원)
     # ========================================
     # 자기 자신을 참조 (Self-Referencing)
-    parent_id: Optional[int] = Field(
-        default=None,
-        sa_column_kwargs={"foreign_key": ForeignKey("board_columns.id")}
-    )
+    parent_id: Optional[int] = Field(default=None, foreign_key="board_columns.id")
     depth: int = Field(default=0) # 0: 최상위, 1: 1단계...
 
     # ========================================
@@ -83,10 +80,11 @@ class BoardColumn(SQLModel, table=True):
     # 관계 설정
     project: Optional["Project"] = Relationship(back_populates="columns")
 
-    # 부모-자식 관계 설정 (Adjacency List Pattern)
     parent: Optional["BoardColumn"] = Relationship(
-        sa_relationship_kwargs={"remote_side": "BoardColumn.id"},
-        back_populates="children"
+        back_populates="children",
+        sa_relationship_kwargs={
+            "remote_side": "BoardColumn.id"  # 문자열로 지정하여 순환 참조 해결
+        }
     )
     children: List["BoardColumn"] = Relationship(back_populates="parent")
 

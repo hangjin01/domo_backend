@@ -12,7 +12,9 @@ from app.models.session import UserSession
 from app.models.verification import EmailVerification # 👈 추가
 from app.schemas import UserCreate, UserLogin, UserResponse, VerificationRequest # 👈 추가
 from app.utils.email import send_verification_email # 👈 추가
-
+from app.models.workspace import Workspace, WorkspaceMember # 👈 워크스페이스 모델 필요
+from passlib.context import CryptContext
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 router = APIRouter(tags=["Authentication"])
 
 # --- 헬퍼 함수 ---
@@ -25,6 +27,60 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def generate_code(length=6):
     return ''.join(random.choices(string.digits, k=length))
+
+@router.post("/auth/setup-admin")
+def create_admin_account(db: Session = Depends(get_db)):
+    """
+    [개발용 치트키] 관리자 계정을 즉시 생성하고 인증까지 완료합니다.
+    - 이메일: admin@domo.com
+    - 비밀번호: admin1234
+    """
+    admin_email = "admin@domo.com"
+
+    # 1. 이미 존재하는지 확인
+    existing_user = db.exec(select(User).where(User.email == admin_email)).first()
+    if existing_user:
+        return {"message": "이미 관리자 계정(admin@domo.com)이 존재합니다. 바로 로그인하세요!"}
+
+    # 2. 관리자 유저 생성
+    # ✅ [수정 1] 파일 상단에 이미 정의된 hash_password 함수 사용 (passlib 불필요)
+    hashed_password = hash_password("admin1234")
+
+    admin_user = User(
+        email=admin_email,
+        password_hash=hashed_password,  # ✅ [수정 2] password -> password_hash 로 변경!
+        name="관리자(Admin)",
+        is_student_verified=True,
+        profile_image="/static/default_profile.png"
+    )
+    db.add(admin_user)
+    db.commit()
+    db.refresh(admin_user)
+
+    # 3. 기본 워크스페이스 생성
+    admin_ws = Workspace(
+        name="Admin Workspace",
+        description="관리자 전용 테스트 공간입니다.",
+        owner_id=admin_user.id
+    )
+    db.add(admin_ws)
+    db.commit()
+    db.refresh(admin_ws)
+
+    # 4. 워크스페이스 멤버 연결
+    ws_member = WorkspaceMember(
+        workspace_id=admin_ws.id,
+        user_id=admin_user.id,
+        role="admin"
+    )
+    db.add(ws_member)
+    db.commit()
+
+    return {
+        "message": "🎉 관리자 계정 세팅 완료!",
+        "email": admin_email,
+        "password": "admin1234",
+    }
 
 # --- 1. 회원가입 (1단계: 정보 등록 & 메일 발송) ---
 @router.post("/signup", response_model=UserResponse)
