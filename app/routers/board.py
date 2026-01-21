@@ -157,6 +157,40 @@ def update_card(
     db.refresh(card)
     return card
 
+@router.delete("/cards/{card_id}")
+@vectorize(search_description="Delete card", capture_return_value=True)
+def delete_card(
+        card_id: int,
+        user_id: int = Depends(get_current_user_id),
+        db: Session = Depends(get_db)
+):
+    # 1. 카드 조회
+    card = db.get(Card, card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="카드를 찾을 수 없습니다.")
+
+    # 2. 삭제 전 로그를 위한 정보 수집 (삭제하면 정보가 사라지므로 미리 조회)
+    column = db.get(BoardColumn, card.column_id)
+    project = db.get(Project, column.project_id) if column else None
+
+    # 3. 삭제 수행
+    # (Card 모델에 cascade 옵션이 잘 설정되어 있다면 댓글 등도 자동 삭제됩니다.)
+    db.delete(card)
+    db.commit()
+
+    # 4. 활동 로그 기록
+    if project:
+        user = db.get(User, user_id)
+        log_activity(
+            db=db,
+            user_id=user_id,
+            workspace_id=project.workspace_id,
+            action_type="DELETE",
+            content=f"🗑️ '{user.name}'님이 카드 '{card.title}'을(를) 삭제했습니다."
+        )
+
+    return {"message": "카드가 삭제되었습니다."}
+
 
 @router.post("/cards/{card_id}/files/{file_id}", response_model=CardResponse)
 @vectorize(search_description="Attach file to card", capture_return_value=True, replay=True)  # 👈 추가
