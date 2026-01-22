@@ -509,27 +509,21 @@ def get_project_connections(
         project_id: int,
         db: Session = Depends(get_db)
 ):
-    """
-    프론트엔드 인터페이스 {id, from, to, boardId, style, shape} 에 맞춰 반환합니다.
-    """
-    # 1. 해당 프로젝트에 속한 연결만 조회 (Join)
+    # ✅ 수정: Card.project_id로 직접 필터링 (column_id JOIN 제거)
     statement = (
         select(CardDependency)
         .join(Card, CardDependency.from_card_id == Card.id)
-        .join(BoardColumn, Card.column_id == BoardColumn.id)
-        .where(BoardColumn.project_id == project_id)
+        .where(Card.project_id == project_id)  # 👈 직접 project_id 사용
     )
     connections = db.exec(statement).all()
 
-    # 2. 응답 데이터 변환 (boardId 주입)
-    # CardDependency 모델에는 board_id가 없으므로, project_id를 boardId로 매핑해줍니다.
     results = []
     for conn in connections:
         results.append(CardConnectionResponse(
             id=conn.id,
             from_card_id=conn.from_card_id,
             to_card_id=conn.to_card_id,
-            board_id=project_id, # 현재 프로젝트 ID를 boardId로 사용
+            board_id=project_id,
             style=conn.style,
             shape=conn.shape
         ))
