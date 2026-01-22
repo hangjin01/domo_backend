@@ -177,10 +177,10 @@ def get_project_connections(project_id: int, db: Session = Depends(get_db)):
         ))
     return results
 
-@router.post("/cards/connections")
+@router.post("/cards/connections", response_model=CardConnectionResponse) # 👈 반환 모델 변경
 @vectorize(search_description="Create dependency between cards", capture_return_value=True)
 def create_card_connection(
-        connection_data: CardConnectionCreate,  # ✅ [수정] 올바른 스키마 사용
+        connection_data: CardConnectionCreate,
         user_id: int = Depends(get_current_user_id),
         db: Session = Depends(get_db)
 ):
@@ -190,7 +190,7 @@ def create_card_connection(
     if not from_card or not to_card:
         raise HTTPException(status_code=404, detail="카드를 찾을 수 없습니다.")
 
-    # ✅ [수정] 컬럼 거치지 않고 카드.project_id 직접 비교 (백로그 카드 지원)
+    # 컬럼 거치지 않고 카드.project_id 직접 비교 (백로그 카드 지원)
     if from_card.project_id != to_card.project_id:
         raise HTTPException(status_code=400, detail="다른 프로젝트의 카드끼리는 연결할 수 없습니다.")
 
@@ -198,8 +198,17 @@ def create_card_connection(
     new_dependency = CardDependency(
         from_card_id=from_card.id,
         to_card_id=to_card.id,
-        dependency_type="finish_to_start" # ✅ 기본값 고정 (스키마에 없음)
+        dependency_type="finish_to_start", # 기본값
+        style="solid",   # 기본값 (필요시 connection_data에서 받아오도록 수정 가능)
+        shape="bezier"   # 기본값
     )
+
+    # 만약 프론트에서 style/shape를 보내준다면 여기서 덮어쓰기
+    if hasattr(connection_data, "style") and connection_data.style:
+        new_dependency.style = connection_data.style
+    if hasattr(connection_data, "shape") and connection_data.shape:
+        new_dependency.shape = connection_data.shape
+
     db.add(new_dependency)
     db.commit()
     db.refresh(new_dependency)
@@ -213,7 +222,15 @@ def create_card_connection(
         content=f"🔗 '{user.name}'님이 카드 '{from_card.title}'와(과) '{to_card.title}'을(를) 연결했습니다."
     )
 
-    return {"message": "카드가 연결되었습니다."}
+    # ✅ [수정] 프론트엔드가 원하는 객체 반환
+    return CardConnectionResponse(
+        id=new_dependency.id,
+        from_card_id=new_dependency.from_card_id,
+        to_card_id=new_dependency.to_card_id,
+        board_id=from_card.project_id,
+        style=new_dependency.style,
+        shape=new_dependency.shape
+    )
 
 @router.delete("/cards/connections/{connection_id}")
 @vectorize(search_description="Delete card connection", capture_return_value=True)
