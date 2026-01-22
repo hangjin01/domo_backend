@@ -24,8 +24,8 @@ class CardDependency(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
 
     # 연결 정보
-    from_card_id: int = Field(foreign_key="cards.id")
-    to_card_id: int = Field(foreign_key="cards.id")
+    from_card_id: int = Field(foreign_key="cards.id", ondelete="CASCADE")
+    to_card_id: int = Field(foreign_key="cards.id", ondelete="CASCADE")
 
     # 스타일 정보 (기본값 설정)
     style: str = Field(default="solid")   # solid, dashed, dotted
