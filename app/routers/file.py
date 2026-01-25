@@ -28,7 +28,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # 1. 파일 업로드 (자동 버전 관리)
 @router.post("/projects/{project_id}/files", response_model=FileResponse)
-@vectorize(search_description="Upload file", capture_return_value=True, replay=True) # 👈 추가
+@vectorize(search_description="Upload file", capture_return_value=True, replay=True)  # 👈 추가
 async def upload_file(
         project_id: int,
         file: UploadFile = File(...),
@@ -111,9 +111,7 @@ async def upload_file(
             content=f"💾 '{user.name}'님이 '{project.name}' 프로젝트에 파일 '{file.filename}'을(를) {action_msg}했습니다."
         )
     except Exception as e:
-        print(f"로그 저장 실패: {e}") # 로그 실패가 파일 업로드를 막으면 안 되므로 예외 처리
-
-
+        print(f"로그 저장 실패: {e}")  # 로그 실패가 파일 업로드를 막으면 안 되므로 예외 처리
 
     # 응답 생성
     return FileResponse(
@@ -130,6 +128,120 @@ async def upload_file(
             uploader_id=new_version.uploader_id
         )
     )
+
+
+@router.post("/projects/{project_id}/files/batch", response_model=List[FileResponse])
+@vectorize(search_description="Batch upload files", capture_return_value=True)
+async def upload_files_batch(
+        project_id: int,
+        files: List[UploadFile] = File(...),  # 👈 핵심: 파일을 리스트로 받음
+        user_id: int = Depends(get_current_user_id),
+        db: Session = Depends(get_db)
+):
+    # 0. 프로젝트 확인 (한 번만 조회)
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    user = db.get(User, user_id)
+    results = []
+
+    # 1. 파일 목록 순회하며 처리
+    for file in files:
+        # --- (기존 단건 업로드 로직 재사용) ---
+
+        # A. 파일 저장
+        file_ext = os.path.splitext(file.filename)[1]
+        saved_filename = f"{uuid.uuid4()}{file_ext}"
+        saved_path = os.path.join(UPLOAD_DIR, saved_filename)
+
+        # 비동기 파일 읽기/쓰기를 위해 file.read() 등을 쓸 수도 있지만,
+        # 대용량 처리를 위해 기존처럼 copyfileobj 사용 (Blocking 방지 위해 run_in_threadpool 등을 고려할 수 있으나 여기선 단순화)
+        with open(saved_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        file_size = os.path.getsize(saved_path)
+
+        # B. DB 메타데이터 확인 및 버전 관리
+        existing_file = db.exec(
+            select(FileMetadata)
+            .where(FileMetadata.project_id == project_id)
+            .where(FileMetadata.filename == file.filename)
+        ).first()
+
+        current_version_num = 1
+        target_file_id = None
+
+        if existing_file:
+            # 이미 존재하면: 메타데이터 업데이트
+            last_version = db.exec(
+                select(FileVersion)
+                .where(FileVersion.file_id == existing_file.id)
+                .order_by(desc(FileVersion.version))
+            ).first()
+
+            if last_version:
+                current_version_num = last_version.version + 1
+
+            target_file_id = existing_file.id
+            existing_file.updated_at = datetime.now()
+            db.add(existing_file)
+        else:
+            # 없으면: 새로 생성
+            new_file = FileMetadata(
+                project_id=project_id,
+                filename=file.filename,
+                owner_id=user_id
+            )
+            db.add(new_file)
+            db.commit()  # ID 생성을 위해 커밋
+            db.refresh(new_file)
+            target_file_id = new_file.id
+            existing_file = new_file
+
+        # C. 버전 정보 저장
+        new_version = FileVersion(
+            file_id=target_file_id,
+            version=current_version_num,
+            saved_path=saved_path,
+            file_size=file_size,
+            uploader_id=user_id
+        )
+        db.add(new_version)
+        db.commit()
+        db.refresh(new_version)
+
+        # D. 결과 리스트에 추가
+        results.append(FileResponse(
+            id=existing_file.id,
+            project_id=existing_file.project_id,
+            filename=existing_file.filename,
+            owner_id=existing_file.owner_id,
+            created_at=existing_file.created_at,
+            latest_version=FileVersionResponse(
+                id=new_version.id,
+                version=new_version.version,
+                file_size=new_version.file_size,
+                created_at=new_version.created_at,
+                uploader_id=new_version.uploader_id
+            )
+        ))
+
+        # E. 로그 기록 (개별 파일마다 남김)
+        try:
+            action_msg = "업로드" if current_version_num == 1 else f"새 버전(v{current_version_num}) 업데이트"
+            log_activity(
+                db=db,
+                user_id=user_id,
+                workspace_id=project.workspace_id,
+                action_type="UPLOAD",
+                content=f"💾 '{user.name}'님이 파일 '{file.filename}'을(를) {action_msg}했습니다."
+            )
+        except Exception:
+            pass
+
+    return results
+
 
 @router.get("/projects/{project_id}/files", response_model=List[FileResponse])
 @vectorize(search_description="List all files in project", capture_return_value=True)
@@ -201,7 +313,7 @@ def download_file_version(version_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/files/{file_id}/versions", response_model=List[FileVersionResponse])
-@vectorize(search_description="Get file version history", capture_return_value=True, replay=True) # 👈 추가
+@vectorize(search_description="Get file version history", capture_return_value=True, replay=True)  # 👈 추가
 def get_file_history(
         file_id: int,
         db: Session = Depends(get_db)
@@ -220,8 +332,9 @@ def get_file_history(
 
     return versions
 
+
 @router.delete("/files/{file_id}")
-@vectorize(search_description="Delete file", capture_return_value=True, replay=True) # 👈 추가
+@vectorize(search_description="Delete file", capture_return_value=True, replay=True)  # 👈 추가
 def delete_file(
         file_id: int,
         user_id: int = Depends(get_current_user_id),

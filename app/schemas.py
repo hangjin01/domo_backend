@@ -441,3 +441,9 @@ class CommunityPostUpdate(BaseModel):
 
 class CommunityCommentUpdate(BaseModel):
     content: str
+
+class CardUpdateItem(CardUpdate):
+    id: int
+
+class BatchCardUpdateRequest(BaseModel):
+    cards: List[CardUpdateItem]

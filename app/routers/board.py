@@ -9,7 +9,8 @@ from app.models.workspace import Project, WorkspaceMember
 from app.schemas import (
     BoardColumnCreate, BoardColumnResponse, CardCreate, CardResponse, CardUpdate,
     CardCommentCreate, CardCommentResponse, BoardColumnUpdate, FileResponse,
-    CardConnectionCreate, CardConnectionResponse, TransformSchema, CardConnectionUpdate  # 👈 CardConnectionCreate 확인
+    CardConnectionCreate, CardConnectionResponse, TransformSchema, CardConnectionUpdate,
+    BatchCardUpdateRequest, CardResponse
 )
 from datetime import datetime
 from app.utils.logger import log_activity
@@ -507,3 +508,49 @@ def create_comment(card_id: int, comment_data: CardCommentCreate, user_id: int =
 def get_card_comments(card_id: int, db: Session = Depends(get_db)):
     comments = db.exec(select(CardComment).where(CardComment.card_id == card_id).order_by(CardComment.created_at.asc())).all()
     return comments
+
+
+@router.patch("/cards/batch", response_model=List[CardResponse])
+@vectorize(search_description="Batch update cards", capture_return_value=True)
+def update_cards_batch(
+        request: BatchCardUpdateRequest,
+        db: Session = Depends(get_db),
+        user_id: int = Depends(get_current_user_id)
+):
+    updated_cards = []
+
+    # 1. 요청받은 모든 카드를 순회
+    for item in request.cards:
+        card = db.get(Card, item.id)
+        if not card:
+            continue  # 없으면 스킵 (혹은 에러 처리)
+
+        # 2. 데이터 업데이트 (값이 있는 것만)
+        # CardUpdate 스키마에 정의된 필드들을 반복하며 적용
+        update_data = item.model_dump(exclude_unset=True)
+
+        # id는 업데이트 대상이 아니므로 제외
+        if "id" in update_data:
+            del update_data["id"]
+
+        # assignee_ids 등 관계형 데이터는 별도 처리가 필요할 수 있음
+        # 여기서는 간단한 필드(x, y, order, column_id 등) 위주로 처리
+        if "assignee_ids" in update_data:
+            # 담당자 변경 로직이 필요하다면 여기에 추가 (기존 로직 참조)
+            pass
+
+        for key, value in update_data.items():
+            if key != "assignee_ids": # 관계형 필드 제외하고 속성 변경
+                setattr(card, key, value)
+
+        db.add(card)
+        updated_cards.append(card)
+
+    # 3. 한 번에 커밋 (Bulk Update 효과)
+    db.commit()
+
+    # 4. 최신 상태로 갱신
+    for card in updated_cards:
+        db.refresh(card)
+
+    return updated_cards
