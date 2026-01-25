@@ -415,7 +415,6 @@ class CommunityCommentResponse(BaseModel):
     id: int
     content: str
     user_id: int
-    user_name: str  # 작성자 이름 편하게 보기 위함
     created_at: datetime
     user: Optional[UserResponse] = None
 
@@ -426,7 +425,6 @@ class CommunityPostResponse(BaseModel):
     content: str
     image_url: Optional[str] = None
     user_id: int
-    user_name: str
     created_at: datetime
     updated_at: datetime
     comments: List[CommunityCommentResponse] = []  # 댓글 목록 포함
