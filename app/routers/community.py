@@ -138,6 +138,31 @@ def create_community_comment(
         user_name=user.name, created_at=new_comment.created_at
     )
 
+@router.get("/community/{post_id}", response_model=CommunityPostResponse)
+@vectorize(search_description="Get community post detail", capture_return_value=True)
+def get_community_post(
+        post_id: int,
+        db: Session = Depends(get_db)
+):
+    post = db.get(CommunityPost, post_id)
+    if not post:
+        raise HTTPException(status_code=404, detail="게시글을 찾을 수 없습니다.")
+
+    # 댓글 목록 변환
+    comments_resp = [
+        CommunityCommentResponse(
+            id=c.id, content=c.content, user_id=c.user_id,
+            user_name=c.user.name if c.user else "Unknown", created_at=c.created_at
+        ) for c in post.comments
+    ]
+
+    return CommunityPostResponse(
+        id=post.id, title=post.title, content=post.content, image_url=post.image_url,
+        user_id=post.user_id, user_name=post.user.name if post.user else "Unknown",
+        created_at=post.created_at, updated_at=post.updated_at,
+        comments=comments_resp
+    )
+
 # ---------------------------------------------------------
 # 🗑️ 게시글 삭제
 # ---------------------------------------------------------
