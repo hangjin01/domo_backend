@@ -326,10 +326,44 @@ def create_invitation(
     db.commit()
 
     # 3. 프론트엔드 URL 생성 (환경변수로 도메인 관리 추천)
-    base_url = "http://localhost:8000"  # 실제 배포 시 변경 필요
+    import os
+    base_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
     invite_link = f"{base_url}/invite/{token}"
 
     return InvitationResponse(invite_link=invite_link, expires_at=expires_at)
+
+
+@router.get("/invitations/{token}", response_model=InvitationInfo)
+@vectorize(search_description="Get invitation info", capture_return_value=True)
+def get_invitation_info(
+        token: str,
+        db: Session = Depends(get_db)
+):
+    """
+    초대 링크 정보 조회 (수락 전 확인용)
+    로그인 없이도 조회 가능
+    """
+    # 1. 초대장 조회
+    invite = db.exec(select(Invitation).where(Invitation.token == token)).first()
+    if not invite:
+        raise HTTPException(status_code=404, detail="유효하지 않은 초대 링크입니다.")
+
+    # 2. 만료 확인
+    if invite.expires_at < datetime.now():
+        raise HTTPException(status_code=400, detail="만료된 초대 링크입니다.")
+
+    # 3. 워크스페이스 & 초대자 정보 조회
+    workspace = db.get(Workspace, invite.workspace_id)
+    inviter = db.get(User, invite.inviter_id)
+
+    if not workspace:
+        raise HTTPException(status_code=404, detail="워크스페이스가 존재하지 않습니다.")
+
+    return InvitationInfo(
+        workspace_name=workspace.name,
+        inviter_name=inviter.name if inviter else "알 수 없음",
+        role=invite.role
+    )
 
 
 @router.post("/invitations/{token}/accept")
