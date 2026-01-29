@@ -17,6 +17,7 @@ from app.models.workspace import Project
 from app.models.user import User
 from app.models.board import CardFileLink
 from vectorwave import *
+from app.utils.connection_manager import board_event_manager
 
 router = APIRouter(tags=["File Management"])
 
@@ -113,8 +114,7 @@ async def upload_file(
     except Exception as e:
         print(f"로그 저장 실패: {e}")  # 로그 실패가 파일 업로드를 막으면 안 되므로 예외 처리
 
-    # 응답 생성
-    return FileResponse(
+    response = FileResponse(
         id=existing_file.id,
         project_id=existing_file.project_id,
         filename=existing_file.filename,
@@ -128,6 +128,13 @@ async def upload_file(
             uploader_id=new_version.uploader_id
         )
     )
+
+    await board_event_manager.broadcast(project_id, {
+        "type": "FILE_UPLOADED",
+        "data": response.model_dump()
+    })
+
+    return response
 
 
 @router.post("/projects/{project_id}/files/batch", response_model=List[FileResponse])
@@ -240,6 +247,11 @@ async def upload_files_batch(
         except Exception:
             pass
 
+    await board_event_manager.broadcast(project_id, {
+        "type": "FILES_UPLOADED",
+        "data": [r.model_dump() for r in results]
+    })
+
     return results
 
 
@@ -335,7 +347,7 @@ def get_file_history(
 
 @router.delete("/files/{file_id}")
 @vectorize(search_description="Delete file", capture_return_value=True, replay=True)  # 👈 추가
-def delete_file(
+async def delete_file(
         file_id: int,
         user_id: int = Depends(get_current_user_id),
         db: Session = Depends(get_db)
@@ -344,6 +356,7 @@ def delete_file(
     file_meta = db.get(FileMetadata, file_id)
     if not file_meta:
         raise HTTPException(status_code=404, detail="파일을 찾을 수 없습니다.")
+    project_id = file_meta.project_id
 
     # 2. 로그를 위한 정보 미리 저장 (삭제 후엔 조회 불가)
     filename = file_meta.filename
@@ -384,5 +397,10 @@ def delete_file(
         )
     except Exception as e:
         print(f"로그 저장 실패: {e}")
+
+    await board_event_manager.broadcast(project_id, {
+        "type": "FILE_DELETED",
+        "data": {"id": file_id}
+    })
 
     return {"message": "파일과 모든 버전이 삭제되었습니다."}

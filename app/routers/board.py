@@ -18,6 +18,8 @@ from app.models.user import User
 from app.models.file import FileMetadata
 from app.models.board import CardFileLink, CardComment, CardDependency
 from vectorwave import *
+from fastapi import WebSocket, WebSocketDisconnect
+from app.utils.connection_manager import board_event_manager
 
 router = APIRouter(tags=["Board & Cards"])
 
@@ -25,9 +27,19 @@ router = APIRouter(tags=["Board & Cards"])
 # 1. 컬럼(Group) 관련 API
 # =================================================================
 
+@router.websocket("/ws/projects/{project_id}/board")
+async def board_events_endpoint(websocket: WebSocket, project_id: int):
+    await board_event_manager.connect(websocket, project_id)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        board_event_manager.disconnect(websocket, project_id)
+
+
 @router.post("/projects/{project_id}/columns", response_model=BoardColumnResponse)
 @vectorize(search_description="Create board column (Group)", capture_return_value=True, replay=True)
-def create_column(
+async def create_column(
         project_id: int,
         col_data: BoardColumnCreate,
         user_id: int = Depends(get_current_user_id),
@@ -44,6 +56,11 @@ def create_column(
     db.add(new_col)
     db.commit()
     db.refresh(new_col)
+
+    await board_event_manager.broadcast(project_id, {
+        "type": "COLUMN_CREATED",
+        "data": new_col.model_dump()
+    })
 
     return BoardColumnResponse(
         id=new_col.id,
@@ -67,7 +84,7 @@ def create_column(
 
 @router.patch("/columns/{column_id}", response_model=BoardColumnResponse)
 @vectorize(search_description="Update board column (Group)", capture_return_value=True)
-def update_column(
+async def update_column(
         column_id: int,
         col_data: BoardColumnUpdate,
         db: Session = Depends(get_db)
@@ -89,6 +106,11 @@ def update_column(
     db.add(col)
     db.commit()
     db.refresh(col)
+
+    await board_event_manager.broadcast(col.project_id, {
+        "type": "COLUMN_UPDATED",
+        "data": col.model_dump()
+    })
 
     return BoardColumnResponse(
         id=col.id,
@@ -112,7 +134,7 @@ def update_column(
 
 @router.delete("/columns/{column_id}")
 @vectorize(search_description="Delete board column (Preserve cards)", capture_return_value=True)
-def delete_column(
+async def delete_column(
         column_id: int,
         user_id: int = Depends(get_current_user_id),
         db: Session = Depends(get_db)
@@ -123,6 +145,7 @@ def delete_column(
     project = db.get(Project, column.project_id)
     col_title = column.title
     card_count = len(column.cards)
+    project_id = column.project_id
 
     # 카드 대피 (column_id = None)
     for card in column.cards:
@@ -141,6 +164,11 @@ def delete_column(
             db=db, user_id=user_id, workspace_id=project.workspace_id, action_type="DELETE",
             content=f"🗑️ '{user.name}'님이 그룹 '{col_title}'을(를) 삭제했습니다. (카드 {card_count}개는 보관됨)"
         )
+
+    await board_event_manager.broadcast(project_id, {
+        "type": "COLUMN_DELETED",
+        "data": {"id": column_id}
+    })
 
     return {"message": "그룹이 삭제되었으며, 포함된 카드들은 보관함으로 이동되었습니다."}
 
@@ -182,7 +210,7 @@ def get_project_connections(project_id: int, db: Session = Depends(get_db)):
 
 @router.post("/cards/connections", response_model=CardConnectionResponse) # 👈 반환 모델 변경
 @vectorize(search_description="Create dependency between cards", capture_return_value=True)
-def create_card_connection(
+async def create_card_connection(
         connection_data: CardConnectionCreate,
         user_id: int = Depends(get_current_user_id),
         db: Session = Depends(get_db)
@@ -218,6 +246,15 @@ def create_card_connection(
     db.commit()
     db.refresh(new_dependency)
 
+    await board_event_manager.broadcast(from_card.project_id, {
+        "type": "CONNECTION_CREATED",
+        "data": {
+            "id": new_dependency.id,
+            "from": new_dependency.from_card_id,
+            "to": new_dependency.to_card_id
+        }
+    })
+
     # 로그 기록
     project = db.get(Project, from_card.project_id)
     user = db.get(User, user_id)
@@ -227,7 +264,6 @@ def create_card_connection(
         content=f"🔗 '{user.name}'님이 카드 '{from_card.title}'와(과) '{to_card.title}'을(를) 연결했습니다."
     )
 
-    # ✅ [수정] 프론트엔드가 원하는 객체 반환
     return CardConnectionResponse(
         id=new_dependency.id,
         from_card_id=new_dependency.from_card_id,
@@ -241,7 +277,7 @@ def create_card_connection(
 
 @router.patch("/cards/connections/{connection_id}", response_model=CardConnectionResponse)
 @vectorize(search_description="Update card connection", capture_return_value=True)
-def update_card_connection(
+async def update_card_connection(
         connection_id: int,
         update_data: CardConnectionUpdate,
         user_id: int = Depends(get_current_user_id),
@@ -290,6 +326,20 @@ def update_card_connection(
         content=f"🔗 '{user.name}'님이 카드 연결을 수정했습니다."
     )
 
+    await board_event_manager.broadcast(card_from.project_id, {
+        "type": "CONNECTION_UPDATED",
+        "data": {
+            "id": conn.id,
+            "from": conn.from_card_id,
+            "to": conn.to_card_id,
+            "style": conn.style,
+            "shape": conn.shape,
+            "sourceHandle": conn.source_handle,
+            "targetHandle": conn.target_handle
+        }
+    })
+
+
     # 7. 응답 반환
     return CardConnectionResponse(
         id=conn.id,
@@ -303,15 +353,33 @@ def update_card_connection(
     )
 
 @router.delete("/cards/connections/{connection_id}")
-@vectorize(search_description="Delete card connection", capture_return_value=True)
-def delete_card_connection(
-        connection_id: int, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)
+@vectorize(search_description="Delete card connection", capture_return_value=True, replay=True)
+async def delete_card_connection(
+        connection_id: int,
+        user_id: int = Depends(get_current_user_id),
+        db: Session = Depends(get_db)
 ):
-    connection = db.get(CardDependency, connection_id)
-    if not connection: raise HTTPException(status_code=404, detail="Connection not found")
-    db.delete(connection)
+    # 1. 삭제할 연결 정보 조회
+    conn = db.get(CardDependency, connection_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="연결을 찾을 수 없습니다.")
+
+    # 2. 브로드캐스트를 위해 프로젝트 ID 확보 (시작점 카드를 통해 조회)
+    from_card = db.get(Card, conn.from_card_id)
+    project_id = from_card.project_id if from_card else None
+
+    # 3. 데이터 삭제
+    db.delete(conn)
     db.commit()
-    return {"message": "연결이 삭제되었습니다."}
+
+    # 4. 실시간 브로드캐스트 전송
+    if project_id:
+        await board_event_manager.broadcast(project_id, {
+            "type": "CONNECTION_DELETED",
+            "data": {"id": connection_id}
+        })
+
+    return {"message": "연결이 성공적으로 삭제되었습니다."}
 
 
 # 🚨 [중요] /cards/comments/... 도 /cards/{card_id}보다 위에 있어야 안전함
@@ -329,7 +397,7 @@ def delete_comment(
 
 @router.patch("/cards/batch", response_model=List[CardResponse])
 @vectorize(search_description="Batch update cards", capture_return_value=True)
-def update_cards_batch(
+async def update_cards_batch(
         request: BatchCardUpdateRequest,
         db: Session = Depends(get_db),
         user_id: int = Depends(get_current_user_id)
@@ -370,6 +438,11 @@ def update_cards_batch(
     for card in updated_cards:
         db.refresh(card)
 
+    await board_event_manager.broadcast(updated_cards[0].project_id, {
+        "type": "CARD_BATCH_UPDATED",
+        "data": [c.model_dump() for c in updated_cards]
+    })
+
     return updated_cards
 
 # =================================================================
@@ -378,7 +451,7 @@ def update_cards_batch(
 
 @router.post("/projects/{project_id}/cards", response_model=CardResponse)
 @vectorize(search_description="Create card in project", capture_return_value=True, replay=True)
-def create_card(
+async def create_card(
         project_id: int,
         card_data: CardCreate,
         user_id: int = Depends(get_current_user_id),
@@ -412,6 +485,11 @@ def create_card(
     db.add(new_card)
     db.commit()
     db.refresh(new_card)
+
+    await board_event_manager.broadcast(project_id, {
+        "type": "CARD_CREATED",
+        "data": new_card.model_dump()
+    })
 
     user = db.get(User, user_id)
     location = f"'{project.name}' 프로젝트"
@@ -447,7 +525,7 @@ def get_project_cards(project_id: int, db: Session = Depends(get_db)):
 
 @router.patch("/cards/{card_id}", response_model=CardResponse)
 @vectorize(search_description="Update card", capture_return_value=True, replay=True)
-def update_card(card_id: int, card_data: CardUpdate, db: Session = Depends(get_db)):
+async def update_card(card_id: int, card_data: CardUpdate, db: Session = Depends(get_db)):
     card = db.get(Card, card_id)
     if not card: raise HTTPException(status_code=404, detail="카드를 찾을 수 없습니다.")
 
@@ -464,19 +542,30 @@ def update_card(card_id: int, card_data: CardUpdate, db: Session = Depends(get_d
     db.add(card)
     db.commit()
     db.refresh(card)
+
+    await board_event_manager.broadcast(card.project_id, {
+        "type": "CARD_UPDATED",
+        "data": card.model_dump()
+    })
+
     return card
 
 @router.delete("/cards/{card_id}")
 @vectorize(search_description="Delete card", capture_return_value=True)
-def delete_card(card_id: int, user_id: int = Depends(get_current_user_id), db: Session = Depends(get_db)):
+async def delete_card(card_id: int, user_id: int = Depends(get_current_user_id), db: Session = Depends(get_db)):
     card = db.get(Card, card_id)
     if not card: raise HTTPException(status_code=404, detail="카드를 찾을 수 없습니다.")
 
     column = db.get(BoardColumn, card.column_id) if card.column_id else None
     project = db.get(Project, card.project_id) if card.project_id else (db.get(Project, column.project_id) if column else None)
-
+    project_id = card.project_id
     db.delete(card)
     db.commit()
+
+    await board_event_manager.broadcast(project_id, {
+        "type": "CARD_DELETED",
+        "data": {"id": card_id}
+    })
 
     if project:
         user = db.get(User, user_id)
@@ -488,7 +577,7 @@ def delete_card(card_id: int, user_id: int = Depends(get_current_user_id), db: S
 
 @router.post("/cards/{card_id}/files/{file_id}", response_model=CardResponse)
 @vectorize(search_description="Attach file to card", capture_return_value=True, replay=True)
-def attach_file_to_card(card_id: int, file_id: int, user_id: int = Depends(get_current_user_id), db: Session = Depends(get_db)):
+async def attach_file_to_card(card_id: int, file_id: int, user_id: int = Depends(get_current_user_id), db: Session = Depends(get_db)):
     card = db.get(Card, card_id)
     file = db.get(FileMetadata, file_id)
     if not card or not file: raise HTTPException(status_code=404, detail="카드 또는 파일을 찾을 수 없습니다.")
@@ -507,11 +596,17 @@ def attach_file_to_card(card_id: int, file_id: int, user_id: int = Depends(get_c
         db=db, user_id=user_id, workspace_id=project.workspace_id, action_type="ATTACH",
         content=f"📎 '{user.name}'님이 카드 '{card.title}'에 파일 '{file.filename}'을(를) 첨부했습니다."
     )
+
+    await board_event_manager.broadcast(card.project_id, {
+        "type": "CARD_UPDATED",
+        "data": card.model_dump()
+    })
+
     return card
 
 @router.delete("/cards/{card_id}/files/{file_id}")
 @vectorize(search_description="Detach file from card", capture_return_value=True, replay=True)
-def detach_file_from_card(card_id: int, file_id: int, user_id: int = Depends(get_current_user_id), db: Session = Depends(get_db)):
+async def detach_file_from_card(card_id: int, file_id: int, user_id: int = Depends(get_current_user_id), db: Session = Depends(get_db)):
     link = db.get(CardFileLink, (card_id, file_id))
     if not link: raise HTTPException(status_code=404, detail="해당 파일이 카드에 첨부되어 있지 않습니다.")
 
@@ -521,12 +616,19 @@ def detach_file_from_card(card_id: int, file_id: int, user_id: int = Depends(get
     user = db.get(User, user_id)
     card = db.get(Card, card_id)
     file = db.get(FileMetadata, file_id)
+    project_id = card.project_id
     project = db.get(Project, card.project_id)
 
     log_activity(
         db=db, user_id=user_id, workspace_id=project.workspace_id, action_type="DETACH",
         content=f"📎 '{user.name}'님이 카드 '{card.title}'에서 파일 '{file.filename}'을(를) 분리했습니다."
     )
+
+    await board_event_manager.broadcast(project_id, {
+        "type": "CARD_UPDATED",
+        "data": card.model_dump()
+    })
+
     return {"message": "파일 연결이 해제되었습니다."}
 
 @router.get("/cards/{card_id}", response_model=CardResponse)
@@ -538,14 +640,21 @@ def get_card(card_id: int, db: Session = Depends(get_db)):
 
 @router.post("/cards/{card_id}/comments", response_model=CardCommentResponse)
 @vectorize(search_description="Add comment to card", capture_return_value=True)
-def create_comment(card_id: int, comment_data: CardCommentCreate, user_id: int = Depends(get_current_user_id), db: Session = Depends(get_db)):
+async def create_comment(card_id: int, comment_data: CardCommentCreate, user_id: int = Depends(get_current_user_id), db: Session = Depends(get_db)):
     card = db.get(Card, card_id)
+    project_id = card.project_id
     if not card: raise HTTPException(status_code=404, detail="Card not found")
 
     new_comment = CardComment(card_id=card_id, user_id=user_id, content=comment_data.content)
     db.add(new_comment)
     db.commit()
     db.refresh(new_comment)
+
+    await board_event_manager.broadcast(project_id, {
+        "type": "CARD_UPDATED",
+        "data": card.model_dump()
+    })
+
     return new_comment
 
 @router.get("/cards/{card_id}/comments", response_model=List[CardCommentResponse])

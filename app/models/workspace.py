@@ -33,6 +33,9 @@ class Workspace(SQLModel, table=True):
                                                     sa_relationship_kwargs={"cascade": "all, delete"})
     activity_logs: List["ActivityLog"] = Relationship(back_populates="workspace",
                                                       sa_relationship_kwargs={"cascade": "all, delete"})
+    invitations: List["Invitation"] = Relationship(
+        sa_relationship_kwargs={"cascade": "all, delete"}
+    )
 
 
 # 3. 프로젝트 (워크스페이스 하위 작업 단위)

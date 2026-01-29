@@ -8,7 +8,7 @@ class Invitation(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     token: str = Field(index=True, unique=True)  # 초대 코드 (URL에 들어갈 값)
-    workspace_id: int = Field(foreign_key="workspaces.id")
+    workspace_id: int = Field(foreign_key="workspaces.id", ondelete="CASCADE")
     inviter_id: int = Field(foreign_key="users.id") # 초대한 사람
 
     role: str = Field(default="member") # 초대받은 사람이 가질 권한

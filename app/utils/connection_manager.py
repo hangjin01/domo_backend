@@ -157,6 +157,29 @@ class VoiceConnectionManager:
         return False
 
 
+class BoardEventManager:
+    def __init__(self):
+        # { project_id: [WebSocket, ...] }
+        self.active_connections: Dict[int, List[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, project_id: int):
+        await websocket.accept()
+        if project_id not in self.active_connections:
+            self.active_connections[project_id] = []
+        self.active_connections[project_id].append(websocket)
+
+    def disconnect(self, websocket: WebSocket, project_id: int):
+        if project_id in self.active_connections:
+            self.active_connections[project_id].remove(websocket)
+
+    async def broadcast(self, project_id: int, message: dict):
+        """해당 프로젝트에 접속한 모든 유저에게 이벤트 전송"""
+        if project_id in self.active_connections:
+            for connection in self.active_connections[project_id]:
+                await connection.send_json(message)
+
+
 # 싱글톤 인스턴스
 manager = ConnectionManager()
 voice_manager = VoiceConnectionManager()
+board_event_manager = BoardEventManager()
