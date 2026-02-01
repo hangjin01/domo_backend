@@ -148,7 +148,6 @@ def verify_email(req: VerificationRequest, db: Session = Depends(get_db)):
 
 # --- 3. 로그인 API (인증 여부 체크 추가) ---
 @router.post("/login")
-@vectorize(search_description="User login", capture_return_value=True, replay=True) # 👈 추가
 def login(response: Response, login_data: UserLogin, db: Session = Depends(get_db)):
     user = db.exec(select(User).where(User.email == login_data.email)).first()
 
