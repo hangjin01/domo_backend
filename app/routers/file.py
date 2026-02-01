@@ -282,6 +282,7 @@ async def delete_file(
         user_id: int = Depends(get_current_user_id),
         db: Session = Depends(get_db)
 ):
+    # 1. 파일 메타데이터 조회
     file_meta = db.get(FileMetadata, file_id)
     if not file_meta:
         raise HTTPException(status_code=404, detail="File not found")
@@ -290,18 +291,27 @@ async def delete_file(
     filename = file_meta.filename
     project_id = file_meta.project_id
 
-    # 실제 파일 삭제 (선택 사항: 로컬 스토리지 정리)
+    # 2. [핵심] 연관된 버전 정보(FileVersion) 먼저 삭제
+    #    부모(FileMetadata)를 지우기 전에 자식(FileVersion)을 먼저 지워야
+    #    FK 제약 조건(NotNullViolation) 에러가 나지 않습니다.
     versions = db.exec(select(FileVersion).where(FileVersion.file_id == file_id)).all()
+
     for v in versions:
+        # 실제 디스크에 있는 파일 삭제 (선택 사항)
         if os.path.exists(v.saved_path):
             try:
                 os.remove(v.saved_path)
-            except:
-                pass
+            except OSError:
+                pass # 파일이 이미 없으면 무시
 
+        # DB에서 버전 행 삭제
+        db.delete(v)
+
+    # 3. 이제 안전하게 메타데이터 삭제
     db.delete(file_meta)
     db.commit()
 
+    # 4. 활동 로그 기록
     if project:
         user = db.get(User, user_id)
         log_activity(
@@ -309,11 +319,12 @@ async def delete_file(
             content=f"🗑️ '{user.name}'님이 파일 '{filename}'을(를) 삭제했습니다."
         )
 
-    # 🔥 [SSE] 파일 삭제 알림
+    # 5. [SSE] 실시간 알림 (jsonable_encoder 사용)
+    #    id는 int라 괜찮지만, 확장성을 위해 encoder 사용 권장
     await board_event_manager.broadcast(project_id, {
         "type": "FILE_DELETED",
         "user_id": user_id,
-        "data": {"id": file_id}  # id는 단순 int라 encoder 없어도 되지만 안전하게
+        "data": {"id": file_id}
     })
 
     return {"message": "파일이 삭제되었습니다."}
