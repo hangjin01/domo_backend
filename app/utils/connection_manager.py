@@ -183,3 +183,4 @@ class BoardEventManager:
 manager = ConnectionManager()
 voice_manager = VoiceConnectionManager()
 board_event_manager = BoardEventManager()
+chat_manager = ConnectionManager()
