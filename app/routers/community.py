@@ -6,7 +6,10 @@ import shutil
 from typing import List, Optional
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+import json
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 from sqlmodel import Session, select
 from app.database import get_db
 from app.models.user import User
@@ -16,16 +19,36 @@ from app.schemas import (
     CommunityPostResponse,
     CommunityCommentResponse,
     CommunityCommentCreate,
-    CommunityPostUpdate,
     CommunityCommentUpdate
 )
 from app.utils.logger import log_activity
+from app.utils.connection_manager import community_event_manager
 from vectorwave import vectorize
 
 router = APIRouter(tags=["Community"])
 
 UPLOAD_DIR = "/app/uploads/community"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+# ---------------------------------------------------------
+# 🔌 WebSocket 엔드포인트 (실시간 커뮤니티 이벤트)
+# ---------------------------------------------------------
+@router.websocket("/ws/community")
+async def community_ws(websocket: WebSocket):
+    await community_event_manager.connect(websocket)
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+                if msg.get("type") == "ping":
+                    await websocket.send_json({"type": "pong"})
+            except json.JSONDecodeError:
+                pass
+    except WebSocketDisconnect:
+        community_event_manager.disconnect(websocket)
+
 
 # ---------------------------------------------------------
 # 📋 게시글 목록 조회 (전체 공개)
@@ -65,7 +88,7 @@ def get_community_posts(
 # ---------------------------------------------------------
 @router.post("/community", response_model=CommunityPostResponse)
 @vectorize(search_description="Create community post", capture_return_value=True)
-def create_community_post(
+async def create_community_post(
         title: str = Form(...),
         content: str = Form(...),
         file: Optional[UploadFile] = File(None),  # ✅ 사진 1장 (선택)
@@ -108,20 +131,29 @@ def create_community_post(
     )
 
     # 5. 응답 반환
-    return CommunityPostResponse(
+    response = CommunityPostResponse(
         id=new_post.id, title=new_post.title, content=new_post.content, image_url=new_post.image_url,
         user_id=new_post.user_id,
-        user=user,  # 👈 User 객체 전달
+        user=user,
         created_at=new_post.created_at, updated_at=new_post.updated_at,
         comments=[]
     )
+
+    # 6. 실시간 broadcast
+    await community_event_manager.broadcast({
+        "type": "POST_CREATED",
+        "user_id": user_id,
+        "data": jsonable_encoder(response)
+    })
+
+    return response
 
 # ---------------------------------------------------------
 # 💬 댓글 작성
 # ---------------------------------------------------------
 @router.post("/community/{post_id}/comments", response_model=CommunityCommentResponse)
 @vectorize(search_description="Add community comment", capture_return_value=True)
-def create_community_comment(
+async def create_community_comment(
         post_id: int,
         comment_data: CommunityCommentCreate,
         user_id: int = Depends(get_current_user_id),
@@ -143,11 +175,20 @@ def create_community_comment(
     # 작성자 정보 조회
     user = db.get(User, user_id)
 
-    return CommunityCommentResponse(
+    response = CommunityCommentResponse(
         id=new_comment.id, content=new_comment.content, user_id=new_comment.user_id,
-        user=user,  # 👈 User 객체 전달
+        user=user,
         created_at=new_comment.created_at
     )
+
+    # 댓글 추가 시 게시글 업데이트 이벤트 broadcast
+    await community_event_manager.broadcast({
+        "type": "COMMENT_CREATED",
+        "user_id": user_id,
+        "data": {"post_id": post_id, "comment": jsonable_encoder(response)}
+    })
+
+    return response
 
 # ---------------------------------------------------------
 # 📖 게시글 상세 조회
@@ -184,7 +225,7 @@ def get_community_post(
 # ---------------------------------------------------------
 @router.delete("/community/{post_id}")
 @vectorize(search_description="Delete community post", capture_return_value=True)
-def delete_community_post(
+async def delete_community_post(
         post_id: int,
         user_id: int = Depends(get_current_user_id),
         db: Session = Depends(get_db)
@@ -209,6 +250,12 @@ def delete_community_post(
     db.delete(post)
     db.commit()
 
+    await community_event_manager.broadcast({
+        "type": "POST_DELETED",
+        "user_id": user_id,
+        "data": {"id": post_id}
+    })
+
     return {"message": "게시글이 삭제되었습니다."}
 
 # ---------------------------------------------------------
@@ -216,7 +263,7 @@ def delete_community_post(
 # ---------------------------------------------------------
 @router.delete("/community/comments/{comment_id}")
 @vectorize(search_description="Delete community comment", capture_return_value=True)
-def delete_community_comment(
+async def delete_community_comment(
         comment_id: int,
         user_id: int = Depends(get_current_user_id),
         db: Session = Depends(get_db)
@@ -230,9 +277,17 @@ def delete_community_comment(
     if comment.user_id != user_id:
         raise HTTPException(status_code=403, detail="작성자만 삭제할 수 있습니다.")
 
+    post_id = comment.post_id
+
     # 3. 삭제
     db.delete(comment)
     db.commit()
+
+    await community_event_manager.broadcast({
+        "type": "COMMENT_DELETED",
+        "user_id": user_id,
+        "data": {"post_id": post_id, "comment_id": comment_id}
+    })
 
     return {"message": "댓글이 삭제되었습니다."}
 
@@ -241,9 +296,12 @@ def delete_community_comment(
 # ---------------------------------------------------------
 @router.patch("/community/{post_id}", response_model=CommunityPostResponse)
 @vectorize(search_description="Update community post", capture_return_value=True)
-def update_community_post(
+async def update_community_post(
         post_id: int,
-        post_data: CommunityPostUpdate,
+        title: Optional[str] = Form(None),
+        content: Optional[str] = Form(None),
+        file: Optional[UploadFile] = File(None),
+        remove_image: Optional[str] = Form(None),
         user_id: int = Depends(get_current_user_id),
         db: Session = Depends(get_db)
 ):
@@ -257,10 +315,44 @@ def update_community_post(
         raise HTTPException(status_code=403, detail="작성자만 수정할 수 있습니다.")
 
     # 3. 데이터 업데이트 (입력된 값만 변경)
-    if post_data.title:
-        post.title = post_data.title
-    if post_data.content:
-        post.content = post_data.content
+    if title is not None:
+        post.title = title
+    if content is not None:
+        post.content = content
+
+    # 4. 이미지 처리
+    if remove_image == "true" and post.image_url:
+        # 기존 이미지 삭제
+        try:
+            old_filename = os.path.basename(post.image_url)
+            old_path = os.path.join(UPLOAD_DIR, old_filename)
+            if os.path.exists(old_path):
+                os.remove(old_path)
+        except Exception:
+            pass
+        post.image_url = None
+
+    if file:
+        if not file.content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail="이미지 파일만 업로드 가능합니다.")
+
+        # 기존 이미지가 있으면 삭제
+        if post.image_url:
+            try:
+                old_filename = os.path.basename(post.image_url)
+                old_path = os.path.join(UPLOAD_DIR, old_filename)
+                if os.path.exists(old_path):
+                    os.remove(old_path)
+            except Exception:
+                pass
+
+        # 새 이미지 저장
+        file_ext = os.path.splitext(file.filename)[1]
+        new_filename = f"{uuid.uuid4().hex}{file_ext}"
+        new_path = os.path.join(UPLOAD_DIR, new_filename)
+        with open(new_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        post.image_url = f"/static/community/{new_filename}"
 
     post.updated_at = datetime.now()
 
@@ -272,25 +364,33 @@ def update_community_post(
     comments_resp = [
         CommunityCommentResponse(
             id=c.id, content=c.content, user_id=c.user_id,
-            user=c.user,  # 👈 User 객체 전달
+            user=c.user,
             created_at=c.created_at
         ) for c in post.comments
     ]
 
-    return CommunityPostResponse(
+    response = CommunityPostResponse(
         id=post.id, title=post.title, content=post.content, image_url=post.image_url,
         user_id=post.user_id,
-        user=post.user,  # 👈 User 객체 전달
+        user=post.user,
         created_at=post.created_at, updated_at=post.updated_at,
         comments=comments_resp
     )
+
+    await community_event_manager.broadcast({
+        "type": "POST_UPDATED",
+        "user_id": user_id,
+        "data": jsonable_encoder(response)
+    })
+
+    return response
 
 # ---------------------------------------------------------
 # ✏️ 댓글 수정
 # ---------------------------------------------------------
 @router.patch("/community/comments/{comment_id}", response_model=CommunityCommentResponse)
 @vectorize(search_description="Update community comment", capture_return_value=True)
-def update_community_comment(
+async def update_community_comment(
         comment_id: int,
         comment_data: CommunityCommentUpdate,
         user_id: int = Depends(get_current_user_id),
@@ -311,8 +411,16 @@ def update_community_comment(
     db.commit()
     db.refresh(comment)
 
-    return CommunityCommentResponse(
+    response = CommunityCommentResponse(
         id=comment.id, content=comment.content, user_id=comment.user_id,
-        user=comment.user,  # 👈 User 객체 전달
+        user=comment.user,
         created_at=comment.created_at
     )
+
+    await community_event_manager.broadcast({
+        "type": "COMMENT_UPDATED",
+        "user_id": user_id,
+        "data": {"post_id": comment.post_id, "comment": jsonable_encoder(response)}
+    })
+
+    return response

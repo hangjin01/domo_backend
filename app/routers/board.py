@@ -91,7 +91,23 @@ async def board_events_endpoint(websocket: WebSocket, project_id: int):
     await board_event_manager.connect(websocket, project_id)
     try:
         while True:
-            await websocket.receive_text()
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+                msg_type = msg.get("type")
+                if msg_type == "ping":
+                    await websocket.send_json({"type": "pong"})
+                elif msg_type == "CURSOR_MOVE":
+                    # 커서 위치를 다른 사용자들에게 relay (발신자 제외)
+                    if project_id in board_event_manager.active_connections:
+                        for conn in board_event_manager.active_connections[project_id]:
+                            if conn != websocket:
+                                try:
+                                    await conn.send_json(msg)
+                                except Exception:
+                                    pass
+            except json.JSONDecodeError:
+                pass
     except WebSocketDisconnect:
         board_event_manager.disconnect(websocket, project_id)
 
