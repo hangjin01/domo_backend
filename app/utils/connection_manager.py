@@ -170,7 +170,8 @@ class BoardEventManager:
 
     def disconnect(self, websocket: WebSocket, project_id: int):
         if project_id in self.active_connections:
-            self.active_connections[project_id].remove(websocket)
+            if websocket in self.active_connections[project_id]:
+                self.active_connections[project_id].remove(websocket)
 
     async def broadcast(self, project_id: int, message: dict):
         """해당 프로젝트에 접속한 모든 유저에게 이벤트 전송"""
@@ -179,8 +180,91 @@ class BoardEventManager:
                 await connection.send_json(message)
 
 
+class WorkspaceEventManager:
+    """
+    워크스페이스 레벨 WebSocket 연결 관리자
+    - 워크스페이스별 연결 관리
+    - 소켓-유저ID 매핑 (self-echo 방지용)
+    - 이벤트: MEMBER_JOINED, MEMBER_LEFT, WORKSPACE_UPDATED, PROJECT_CREATED, PROJECT_DELETED
+    """
+    def __init__(self):
+        # { workspace_id: [WebSocket, ...] }
+        self.active_connections: Dict[int, List[WebSocket]] = {}
+        # { workspace_id: { socket: user_id } }
+        self.socket_user_map: Dict[int, Dict[WebSocket, int]] = {}
+
+    async def connect(self, websocket: WebSocket, workspace_id: int, user_id: int):
+        await websocket.accept()
+        if workspace_id not in self.active_connections:
+            self.active_connections[workspace_id] = []
+            self.socket_user_map[workspace_id] = {}
+        self.active_connections[workspace_id].append(websocket)
+        self.socket_user_map[workspace_id][websocket] = user_id
+        logger.debug(f"[WorkspaceManager] User {user_id} connected to workspace {workspace_id}. Total: {len(self.active_connections[workspace_id])}")
+
+    def disconnect(self, websocket: WebSocket, workspace_id: int):
+        if workspace_id in self.active_connections:
+            if websocket in self.active_connections[workspace_id]:
+                self.active_connections[workspace_id].remove(websocket)
+            if workspace_id in self.socket_user_map and websocket in self.socket_user_map[workspace_id]:
+                del self.socket_user_map[workspace_id][websocket]
+            if not self.active_connections[workspace_id]:
+                del self.active_connections[workspace_id]
+                if workspace_id in self.socket_user_map:
+                    del self.socket_user_map[workspace_id]
+        logger.debug(f"[WorkspaceManager] Disconnected from workspace {workspace_id}")
+
+    async def broadcast(self, workspace_id: int, message: dict):
+        """해당 워크스페이스에 접속한 모든 유저에게 이벤트 전송"""
+        if workspace_id not in self.active_connections:
+            return
+        dead_connections = []
+        for connection in self.active_connections[workspace_id]:
+            try:
+                await connection.send_json(message)
+            except Exception as e:
+                logger.error(f"[WorkspaceManager] Failed to send: {e}")
+                dead_connections.append(connection)
+        for dc in dead_connections:
+            self.disconnect(dc, workspace_id)
+
+
+class CommunityEventManager:
+    """
+    글로벌 커뮤니티 WebSocket 연결 관리자
+    - 프로젝트/워크스페이스 구분 없이 전체 연결 관리
+    - 이벤트: POST_CREATED, POST_DELETED, POST_UPDATED
+    """
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        logger.debug(f"[CommunityManager] Connected. Total: {len(self.active_connections)}")
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        logger.debug(f"[CommunityManager] Disconnected. Total: {len(self.active_connections)}")
+
+    async def broadcast(self, message: dict):
+        """모든 연결된 클라이언트에게 이벤트 전송"""
+        dead_connections = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception as e:
+                logger.error(f"[CommunityManager] Failed to send: {e}")
+                dead_connections.append(connection)
+        for dc in dead_connections:
+            self.disconnect(dc)
+
+
 # 싱글톤 인스턴스
 manager = ConnectionManager()
 voice_manager = VoiceConnectionManager()
 board_event_manager = BoardEventManager()
 chat_manager = ConnectionManager()
+workspace_event_manager = WorkspaceEventManager()
+community_event_manager = CommunityEventManager()

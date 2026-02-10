@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlmodel import Session, select
 from typing import List
 import uuid
@@ -20,6 +20,7 @@ import asyncio
 import json
 from fastapi import Request
 from fastapi.responses import StreamingResponse
+from app.utils.connection_manager import workspace_event_manager
 
 router = APIRouter(tags=["Workspace & Project"])
 
@@ -99,7 +100,7 @@ def get_my_workspaces(
 # 3. 프로젝트 생성 (워크스페이스 안에)
 @router.post("/workspaces/{workspace_id}/projects", response_model=ProjectResponse)
 @vectorize(search_description="Create project", capture_return_value=True, replay=True)  # 👈 추가
-def create_project(
+async def create_project(
         workspace_id: int,
         project_data: ProjectCreate,
         user_id: int = Depends(get_current_user_id),
@@ -128,6 +129,12 @@ def create_project(
         content=f"📂 '{user.name}'님이 프로젝트 '{new_project.name}'을(를) 만들었습니다."
     )
 
+    await workspace_event_manager.broadcast(workspace_id, {
+        "type": "PROJECT_CREATED",
+        "user_id": user_id,
+        "data": {"id": new_project.id, "name": new_project.name, "description": new_project.description, "workspace_id": workspace_id}
+    })
+
     return new_project
 
 
@@ -153,7 +160,7 @@ def get_workspace_projects(
 # 5. 워크스페이스에 팀원 초대 (이메일로 추가)
 @router.post("/workspaces/{workspace_id}/members")
 @vectorize(search_description="Add member manually", capture_return_value=True, replay=True)  # 👈 추가
-def add_workspace_member(
+async def add_workspace_member(
         workspace_id: int,
         request: AddMemberRequest,
         user_id: int = Depends(get_current_user_id),
@@ -192,6 +199,16 @@ def add_workspace_member(
         action_type="MEMBER_ADD",
         content=f"👥 '{actor.name}'님이 '{target_user.name}'님을 '{ws.name}' 워크스페이스 멤버로 추가했습니다."
     )
+
+    await workspace_event_manager.broadcast(workspace_id, {
+        "type": "MEMBER_JOINED",
+        "user_id": user_id,
+        "data": {
+            "workspace_id": workspace_id,
+            "user": {"id": target_user.id, "name": target_user.name, "email": target_user.email},
+            "role": "member",
+        }
+    })
 
     return {"message": f"{target_user.name} 님이 팀원으로 추가되었습니다."}
 
@@ -368,7 +385,7 @@ def get_invitation_info(
 
 @router.post("/invitations/{token}/accept")
 @vectorize(search_description="Accept invitation", capture_return_value=True, replay=True)  # 👈 추가
-def accept_invitation(
+async def accept_invitation(
         token: str,
         user_id: int = Depends(get_current_user_id),
         db: Session = Depends(get_db)
@@ -407,7 +424,48 @@ def accept_invitation(
         content=f"👋 '{new_comer.name}'님이 '{ws.name}' 워크스페이스에 참여했습니다."
     )
 
+    # 📡 실시간 broadcast: 해당 워크스페이스 멤버들에게 알림
+    await workspace_event_manager.broadcast(invite.workspace_id, {
+        "type": "MEMBER_JOINED",
+        "user_id": user_id,
+        "data": {
+            "workspace_id": invite.workspace_id,
+            "user": {
+                "id": new_comer.id,
+                "name": new_comer.name,
+                "email": new_comer.email,
+            },
+            "role": invite.role,
+        }
+    })
+
     return {"message": "워크스페이스에 성공적으로 참여했습니다!"}
+
+
+# =================================================================
+# 📡 워크스페이스 실시간 WebSocket
+# =================================================================
+
+@router.websocket("/ws/workspaces/{workspace_id}")
+async def workspace_events_endpoint(websocket: WebSocket, workspace_id: int, user_id: int = 0):
+    # user_id를 query param으로 받음 (쿠키는 Secure 플래그로 인해 HTTP 환경에서 전달 안 됨)
+    if not user_id:
+        await websocket.close(code=4001, reason="user_id required")
+        return
+
+    await workspace_event_manager.connect(websocket, workspace_id, user_id)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            # ping/pong heartbeat
+            try:
+                msg = json.loads(data)
+                if msg.get("type") == "ping":
+                    await websocket.send_json({"type": "pong"})
+            except json.JSONDecodeError:
+                pass
+    except WebSocketDisconnect:
+        workspace_event_manager.disconnect(websocket, workspace_id)
 
 
 @router.delete("/workspaces/{workspace_id}")
@@ -432,7 +490,7 @@ def delete_workspace(
 # 2. 프로젝트 삭제
 @router.delete("/projects/{project_id}")
 @vectorize(search_description="Delete project", capture_return_value=True)
-def delete_project(
+async def delete_project(
         project_id: int,
         user_id: int = Depends(get_current_user_id),
         db: Session = Depends(get_db)
@@ -446,21 +504,31 @@ def delete_project(
     if workspace.owner_id != user_id:
         raise HTTPException(status_code=403, detail="워크스페이스 소유자만 프로젝트를 삭제할 수 있습니다.")
 
+    project_name = project.name
+    workspace_id = project.workspace_id
+
     user = db.get(User, user_id)
     log_activity(
         db=db, user_id=user_id, workspace_id=workspace.id, action_type="DELETE",
-        content=f"🗑️ '{user.name}'님이 프로젝트 '{project.name}'을(를) 삭제했습니다."
+        content=f"🗑️ '{user.name}'님이 프로젝트 '{project_name}'을(를) 삭제했습니다."
     )
 
     db.delete(project)
     db.commit()
+
+    await workspace_event_manager.broadcast(workspace_id, {
+        "type": "PROJECT_DELETED",
+        "user_id": user_id,
+        "data": {"id": project_id, "workspace_id": workspace_id}
+    })
+
     return {"message": "프로젝트가 삭제되었습니다."}
 
 
 # 3. 워크스페이스 멤버 삭제 (강퇴 또는 본인 탈퇴)
 @router.delete("/workspaces/{workspace_id}/members/{target_user_id}")
 @vectorize(search_description="Remove workspace member", capture_return_value=True)  # 👈 추가
-def remove_workspace_member(
+async def remove_workspace_member(
         workspace_id: int,
         target_user_id: int,
         user_id: int = Depends(get_current_user_id),
@@ -504,13 +572,23 @@ def remove_workspace_member(
     db.delete(member)
     db.commit()
 
+    await workspace_event_manager.broadcast(workspace_id, {
+        "type": "MEMBER_LEFT",
+        "user_id": user_id,
+        "data": {
+            "workspace_id": workspace_id,
+            "target_user_id": target_user_id,
+            "target_user_name": target.name,
+        }
+    })
+
     action = "탈퇴" if user_id == target_user_id else "강퇴"
     return {"message": f"멤버가 성공적으로 {action}처리 되었습니다."}
 
 
 @router.patch("/workspaces/{workspace_id}", response_model=WorkspaceResponse)
 @vectorize(search_description="Update workspace info", capture_return_value=True)
-def update_workspace(
+async def update_workspace(
         workspace_id: int,
         ws_data: WorkspaceUpdate,
         user_id: int = Depends(get_current_user_id),
@@ -540,6 +618,12 @@ def update_workspace(
         db=db, user_id=user_id, workspace_id=workspace_id, action_type="UPDATE",
         content=f"⚙️ '{user.name}'님이 워크스페이스 정보를 수정했습니다."
     )
+
+    await workspace_event_manager.broadcast(workspace_id, {
+        "type": "WORKSPACE_UPDATED",
+        "user_id": user_id,
+        "data": {"id": workspace.id, "name": workspace.name, "description": workspace.description}
+    })
 
     return workspace
 
