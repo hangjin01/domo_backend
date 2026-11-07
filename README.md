@@ -5,6 +5,51 @@ PostgreSQL·SQLModel과 쿠키 세션 인증을 사용하며, WebSocket 기반 �
 
 프론트 저장소: [hangjin01/domo_frontend](https://github.com/hangjin01/domo_frontend)
 
+## 화면과 함께 보는 API 역할
+
+아래 이미지는 프론트 저장소의 **로컬 목 모드 캡처**입니다.
+사용자가 어떤 화면에서 API를 사용하게 되는지 설명하기 위한 참고 자료이며,
+이 화면들이 실제 서버와 연결된 상태라는 뜻은 아닙니다.
+
+### 보드 · 그룹 · 카드
+
+작업을 카드로 관리하고 그룹과 연결선으로 관계를 표현합니다.
+백엔드의 관련 구현은 [보드 라우터](app/routers/board.py), [보드 모델](app/models/board.py), [요청·응답 DTO](app/schemas.py)입니다.
+최신 프론트의 금액·카드 크기 필드는 아직 서버 저장과 연동되지 않았습니다.
+
+![로컬 데모 보드와 그룹 및 카드](https://raw.githubusercontent.com/hangjin01/domo_frontend/main/docs/15-board-zoom.png)
+
+### 카드 상세와 연결선
+
+카드 상세는 작업 내용을, 연결선 메뉴는 카드 사이의 관계를 편집하는 UI입니다.
+API 변경 시 카드·연결선 DTO와 프론트 매핑을 함께 확인해야 합니다.
+아래 상세 화면은 금액·크기 옵션 추가 전 캡처입니다.
+
+| 카드 상세 | 연결선 메뉴 |
+| --- | --- |
+| ![카드 제목 설명 첨부 및 활동 영역](https://raw.githubusercontent.com/hangjin01/domo_frontend/main/docs/demo/screenshots/03-card-detail.png) | ![실선 점선 화살표선 메뉴](https://raw.githubusercontent.com/hangjin01/domo_frontend/main/docs/demo/screenshots/10-connection-styles.png) |
+
+### 일정 화면
+
+[일정 라우터](app/routers/schedule.py)와 [일정 모델](app/models/schedule.py)은 일정 도메인을 담당합니다.
+프론트의 월간 달력·타임라인과 서버의 개인 시간표/공통 빈 시간 계산은 개념이 같지 않으므로
+화면마다 실제 호출과 DTO를 확인해야 합니다. 아래는 일정이 비어 있는 데모 화면입니다.
+
+![일정이 없는 월간 달력](https://raw.githubusercontent.com/hangjin01/domo_frontend/main/docs/demo/screenshots/04-calendar.png)
+
+### 채팅 · 게시판
+
+[채팅 라우터](app/routers/chat.py)는 채팅 관련 요청을,
+[커뮤니티 라우터](app/routers/community.py)와 [게시글 라우터](app/routers/post.py)는 커뮤니티·게시글 관련 요청을 담당합니다.
+실시간 연결 관리는 [connection_manager.py](app/utils/connection_manager.py)를 함께 확인합니다.
+
+| 채팅 입력 화면 | 게시판 목록 |
+| --- | --- |
+| ![메시지가 없는 로컬 채팅 화면](https://raw.githubusercontent.com/hangjin01/domo_frontend/main/docs/demo/screenshots/06-chat.png) | ![데모 공지 및 게시글 목록](https://raw.githubusercontent.com/hangjin01/domo_frontend/main/docs/demo/screenshots/07-community.png) |
+
+이 캡처는 로컬 저장 기반입니다. 서버 모드의 인증·권한·다중 사용자 이벤트 전달은 별도 검증이 필요합니다.
+금액·테마·데스크톱 등 전체 화면 소개는 [프론트 기능 갤러리](https://github.com/hangjin01/domo_frontend#화면으로-보는-기능)를 참고하세요.
+
 ## 로컬 실행
 
 Docker Compose 또는 Fedora의 Podman Compose를 사용합니다.
