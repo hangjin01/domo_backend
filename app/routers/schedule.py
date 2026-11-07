@@ -1,3 +1,9 @@
+# [파일 안내] backend/app/routers/schedule.py
+# 개인 시간표·공통 여유 시간과 프로젝트 일정 요청을 처리하는 FastAPI 라우터입니다.
+# 경로 접두사는 main.py의 include_router에서 붙습니다. 아래 데코레이터는 파일 내부 상대 경로이며 응답 DTO는 schemas.py에 있습니다.
+# 일반 흐름은 입력 검증 → 세션/대상 확인 → DB 조회/변경 → commit/refresh → 응답/실시간 알림입니다. 모든 함수가 같은 권한 검사를 하는 것은 아닙니다.
+# 현재 WS·파일 접근 등 권한 보강 과제가 남아 있습니다. Depends 존재 여부와 함수 본문의 팀원/소유자 검사를 모두 확인하세요.
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 from typing import List
@@ -12,12 +18,15 @@ from app.schemas import ScheduleCreate, ScheduleResponse, FreeTimeSlot, ProjectE
     ProjectEventUpdate, ScheduleUpdate
 from app.utils.logger import log_activity
 from app.models.workspace import Project
-from vectorwave import *
+from app.utils.vectorwave import vectorize
 
 router = APIRouter(tags=["Schedule & Free Time"])
 
 
 # 1. 내 시간표 등록 (수업 추가)
+# 엔드포인트: POST /schedules → add_schedule.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.post("/schedules", response_model=ScheduleResponse)
 @vectorize(search_description="Create a personal schedule", capture_return_value=True, replay=True)
 def add_schedule(s_data: ScheduleCreate,
@@ -40,6 +49,9 @@ def add_schedule(s_data: ScheduleCreate,
     return new_schedule
 
 
+# 엔드포인트: DELETE /schedules/{schedule_id} → delete_personal_schedule.
+# 주입 의존성: Depends(get_db), Depends(get_current_user_id).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.delete("/schedules/{schedule_id}")
 @vectorize(search_description="Delete personal schedule", capture_return_value=True)
 def delete_personal_schedule(
@@ -68,6 +80,8 @@ def delete_personal_schedule(
 
     return {"message": "개인 일정이 삭제되었습니다."}
 
+# 엔드포인트: GET /schedules/me → get_my_schedules.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
 @router.get("/schedules/me", response_model=List[ScheduleResponse])
 @vectorize(search_description="Get my schedules", capture_return_value=True) # 👈 추가
 def get_my_schedules(
@@ -82,6 +96,8 @@ def get_my_schedules(
 
 
 # 2. 특정 워크스페이스 팀원들의 공통 빈 시간 계산 (핵심!)
+# 엔드포인트: GET /workspaces/{workspace_id}/free-time → get_common_free_time.
+# 주입 의존성: Depends(get_db).
 @router.get("/workspaces/{workspace_id}/free-time", response_model=List[FreeTimeSlot])
 def get_common_free_time(workspace_id: int, db: Session = Depends(get_db)):
     # 1. 워크스페이스 모든 멤버 ID 조회
@@ -133,6 +149,8 @@ def get_common_free_time(workspace_id: int, db: Session = Depends(get_db)):
     return free_slots
 
 
+# 엔드포인트: GET /projects/{project_id}/events → get_project_events.
+# 주입 의존성: Depends(get_db), Depends(get_current_user_id).
 @router.get("/projects/{project_id}/events", response_model=List[ProjectEventResponse])
 @vectorize(search_description="List project calendar events", capture_return_value=True)
 def get_project_events(
@@ -146,6 +164,9 @@ def get_project_events(
 
 
 # 2. 프로젝트 일정 등록
+# 엔드포인트: POST /projects/{project_id}/events → create_project_event.
+# 주입 의존성: Depends(get_db), Depends(get_current_user_id).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.post("/projects/{project_id}/events", response_model=ProjectEventResponse)
 @vectorize(search_description="Create project calendar event", capture_return_value=True)
 def create_project_event(
@@ -183,6 +204,9 @@ def create_project_event(
 
 
 # 3. 프로젝트 일정 삭제
+# 엔드포인트: DELETE /events/{event_id} → delete_project_event.
+# 주입 의존성: Depends(get_db), Depends(get_current_user_id).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.delete("/events/{event_id}")
 @vectorize(search_description="Delete project event", capture_return_value=True)
 def delete_project_event(
@@ -207,6 +231,9 @@ def delete_project_event(
 
     return {"message": "일정이 삭제되었습니다."}
 
+# 엔드포인트: PATCH /schedules/{schedule_id} → update_personal_schedule.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.patch("/schedules/{schedule_id}", response_model=ScheduleResponse)
 @vectorize(search_description="Update personal schedule", capture_return_value=True)
 def update_personal_schedule(
@@ -246,6 +273,9 @@ def update_personal_schedule(
 
 
 # 2. 프로젝트 일정 수정 (예: 회의 시간 변경)
+# 엔드포인트: PATCH /projects/events/{event_id} → update_project_event.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.patch("/projects/events/{event_id}", response_model=ProjectEventResponse)
 @vectorize(search_description="Update project event", capture_return_value=True)
 def update_project_event(

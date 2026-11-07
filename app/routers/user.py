@@ -1,3 +1,9 @@
+# [파일 안내] backend/app/routers/user.py
+# 인증 사용자 정보·프로필·탈퇴 요청을 처리하는 FastAPI 라우터입니다.
+# 경로 접두사는 main.py의 include_router에서 붙습니다. 아래 데코레이터는 파일 내부 상대 경로이며 응답 DTO는 schemas.py에 있습니다.
+# 일반 흐름은 입력 검증 → 세션/대상 확인 → DB 조회/변경 → commit/refresh → 응답/실시간 알림입니다. 모든 함수가 같은 권한 검사를 하는 것은 아닙니다.
+# 현재 WS·파일 접근 등 권한 보강 과제가 남아 있습니다. Depends 존재 여부와 함수 본문의 팀원/소유자 검사를 모두 확인하세요.
+
 import os
 import shutil
 import uuid
@@ -8,7 +14,7 @@ from app.database import get_db
 from app.routers.workspace import get_current_user_id
 from app.models.user import User
 from app.schemas import UserResponse, UserUpdate
-from vectorwave import vectorize
+from app.utils.vectorwave import vectorize
 from app.utils.logger import log_activity
 from datetime import datetime
 
@@ -18,6 +24,9 @@ UPLOAD_DIR = "/app/uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
+# 엔드포인트: PATCH /users/me/profile-image → update_profile_image.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.patch("/users/me/profile-image", response_model=UserResponse)
 @vectorize(search_description="Update user profile image", capture_return_value=True)
 def update_profile_image(
@@ -59,6 +68,8 @@ def update_profile_image(
     return user
 
 
+# 엔드포인트: GET /users/me → get_my_info.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
 @router.get("/users/me", response_model=UserResponse)
 def get_my_info(
         user_id: int = Depends(get_current_user_id),
@@ -69,6 +80,9 @@ def get_my_info(
         raise HTTPException(status_code=404, detail="User not found")
     return user
 
+# 엔드포인트: PATCH /users/me → update_my_info.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.patch("/users/me", response_model=UserResponse)
 @vectorize(search_description="Update user name", capture_return_value=True)
 def update_my_info(
@@ -97,6 +111,9 @@ def update_my_info(
 
     return user
 
+# 엔드포인트: DELETE /users/me → withdraw_user.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.delete("/users/me")
 def withdraw_user(
         user_id: int = Depends(get_current_user_id),

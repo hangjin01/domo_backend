@@ -1,3 +1,9 @@
+# [파일 안내] backend/app/routers/board.py
+# 카드·컬럼/그룹·연결선·댓글 및 보드 이벤트 요청을 처리하는 FastAPI 라우터입니다.
+# 경로 접두사는 main.py의 include_router에서 붙습니다. 아래 데코레이터는 파일 내부 상대 경로이며 응답 DTO는 schemas.py에 있습니다.
+# 일반 흐름은 입력 검증 → 세션/대상 확인 → DB 조회/변경 → commit/refresh → 응답/실시간 알림입니다. 모든 함수가 같은 권한 검사를 하는 것은 아닙니다.
+# 현재 WS·파일 접근 등 권한 보강 과제가 남아 있습니다. Depends 존재 여부와 함수 본문의 팀원/소유자 검사를 모두 확인하세요.
+
 # app/routers/board.py
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlmodel import Session, select
@@ -23,7 +29,7 @@ from app.models.user import User
 from app.models.file import FileMetadata
 from app.models.board import CardFileLink, CardComment, CardDependency
 from app.utils.logger import log_activity
-from vectorwave import *
+from app.utils.vectorwave import vectorize
 from fastapi import WebSocket, WebSocketDisconnect
 from app.utils.connection_manager import board_event_manager
 
@@ -42,6 +48,8 @@ def serialize_card(card: Card) -> dict:
 # =================================================================
 # 📡 [신규] 보드 실시간 구독 (SSE)
 # =================================================================
+# 엔드포인트: GET /projects/{project_id}/board/events → stream_board_events.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
 @router.get("/projects/{project_id}/board/events")
 async def stream_board_events(
         project_id: int,
@@ -86,6 +94,9 @@ async def stream_board_events(
 # 1. 컬럼(Group) 관련 API
 # =================================================================
 
+# 엔드포인트: WEBSOCKET /ws/projects/{project_id}/board → board_events_endpoint.
+# 주입 의존성: 선언 없음; 함수 본문에서 별도 검증하는지 확인 필요.
+# 연결이 유지되는 동안 메시지를 반복 처리합니다. 종료/예외에서 연결 해제를 수행하고 클라이언트 식별값을 그대로 신뢰하지 않도록 주의합니다.
 @router.websocket("/ws/projects/{project_id}/board")
 async def board_events_endpoint(websocket: WebSocket, project_id: int):
     await board_event_manager.connect(websocket, project_id)
@@ -112,6 +123,10 @@ async def board_events_endpoint(websocket: WebSocket, project_id: int):
         board_event_manager.disconnect(websocket, project_id)
 
 
+# 엔드포인트: POST /projects/{project_id}/columns → create_column.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.post("/projects/{project_id}/columns", response_model=BoardColumnResponse)
 @vectorize(search_description="Create board column (Group)", capture_return_value=True, replay=True)
 async def create_column(
@@ -159,6 +174,10 @@ async def create_column(
         )
     )
 
+# 엔드포인트: PATCH /columns/{column_id} → update_column.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.patch("/columns/{column_id}", response_model=BoardColumnResponse)
 @vectorize(search_description="Update board column (Group)", capture_return_value=True)
 async def update_column(
@@ -212,6 +231,10 @@ async def update_column(
         )
     )
 
+# 엔드포인트: DELETE /columns/{column_id} → delete_column.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.delete("/columns/{column_id}")
 @vectorize(search_description="Delete board column (Preserve cards)", capture_return_value=True)
 async def delete_column(
@@ -227,14 +250,30 @@ async def delete_column(
     card_count = len(column.cards)
     project_id = column.project_id
 
-    # 카드 대피 (column_id = None)
+    # 카드 상대 좌표를 보드 좌표로 변환하고 그룹만 제거합니다.
+    # 중간 commit을 하지 않아 카드 대피/자식 해제/그룹 삭제가 한 트랜잭션입니다.
     for card in column.cards:
+        card.local_x += column.local_x
+        card.local_y += column.local_y
         card.column_id = None
         db.add(card)
-    db.commit() # 대피 내용 저장
-
-    # 컬럼 삭제
-    db.refresh(column)
+    remaining = db.exec(select(BoardColumn).where(
+        BoardColumn.project_id == project_id, BoardColumn.id != column_id
+    )).all()
+    by_id = {item.id: item for item in remaining}
+    for item in remaining:
+        # 현재 화면에서 그룹 좌표는 보드 절대 좌표이므로 위치는 그대로 둡니다.
+        if item.parent_id == column_id:
+            item.parent_id = None
+    for item in remaining:
+        parent_id, depth, seen = item.parent_id, 0, {item.id}
+        while parent_id in by_id and parent_id not in seen:
+            seen.add(parent_id)
+            depth += 1
+            parent_id = by_id[parent_id].parent_id
+        item.depth = depth
+        db.add(item)
+    db.flush()
     db.delete(column)
     db.commit()
 
@@ -254,6 +293,8 @@ async def delete_column(
     return {"message": "그룹이 삭제되었으며, 포함된 카드들은 보관함으로 이동되었습니다."}
 
 
+# 엔드포인트: GET /projects/{project_id}/columns → get_project_columns.
+# 주입 의존성: Depends(get_db).
 @router.get("/projects/{project_id}/columns", response_model=List[BoardColumnResponse])
 def get_project_columns(project_id: int, db: Session = Depends(get_db)):
     columns = db.exec(select(BoardColumn).where(BoardColumn.project_id == project_id).order_by(BoardColumn.order)).all()
@@ -265,6 +306,8 @@ def get_project_columns(project_id: int, db: Session = Depends(get_db)):
 # 🚨 [중요] /cards/{card_id} 보다 상위에 위치해야 함 (라우팅 순서 문제 해결)
 # =================================================================
 
+# 엔드포인트: GET /projects/{project_id}/connections → get_project_connections.
+# 주입 의존성: Depends(get_db).
 @router.get("/projects/{project_id}/connections", response_model=List[CardConnectionResponse])
 @vectorize(search_description="Get project card connections", capture_return_value=True)
 def get_project_connections(project_id: int, db: Session = Depends(get_db)):
@@ -289,6 +332,10 @@ def get_project_connections(project_id: int, db: Session = Depends(get_db)):
         ))
     return results
 
+# 엔드포인트: POST /cards/connections → create_card_connection.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.post("/cards/connections", response_model=CardConnectionResponse) # 👈 반환 모델 변경
 @vectorize(search_description="Create dependency between cards", capture_return_value=True)
 async def create_card_connection(
@@ -356,6 +403,10 @@ async def create_card_connection(
 
     return response_data
 
+# 엔드포인트: PATCH /cards/connections/{connection_id} → update_card_connection.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.patch("/cards/connections/{connection_id}", response_model=CardConnectionResponse)
 @vectorize(search_description="Update card connection", capture_return_value=True)
 async def update_card_connection(
@@ -428,6 +479,10 @@ async def update_card_connection(
     # 7. 응답 반환
     return response_data
 
+# 엔드포인트: DELETE /cards/connections/{connection_id} → delete_card_connection.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.delete("/cards/connections/{connection_id}")
 @vectorize(search_description="Delete card connection", capture_return_value=True, replay=True)
 async def delete_card_connection(
@@ -460,6 +515,9 @@ async def delete_card_connection(
 
 
 # 🚨 [중요] /cards/comments/... 도 /cards/{card_id}보다 위에 있어야 안전함
+# 엔드포인트: DELETE /cards/comments/{comment_id} → delete_comment.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.delete("/cards/comments/{comment_id}")
 def delete_comment(
         comment_id: int, user_id: int = Depends(get_current_user_id), db: Session = Depends(get_db)
@@ -472,6 +530,10 @@ def delete_comment(
     db.commit()
     return {"message": "댓글이 삭제되었습니다."}
 
+# 엔드포인트: PATCH /cards/batch → update_cards_batch.
+# 주입 의존성: Depends(get_db), Depends(get_current_user_id).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.patch("/cards/batch", response_model=List[CardResponse])
 @vectorize(search_description="Batch update cards", capture_return_value=True)
 async def update_cards_batch(
@@ -531,6 +593,10 @@ async def update_cards_batch(
 # 3. 카드(Card) API
 # =================================================================
 
+# 엔드포인트: POST /projects/{project_id}/cards → create_card.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.post("/projects/{project_id}/cards", response_model=CardResponse)
 @vectorize(search_description="Create card in project", capture_return_value=True, replay=True)
 async def create_card(
@@ -587,6 +653,8 @@ async def create_card(
     )
     return new_card
 
+# 엔드포인트: GET /projects/{project_id}/board → get_board.
+# 주입 의존성: Depends(get_db).
 @router.get("/projects/{project_id}/board")
 @vectorize(search_description="Get project kanban board", capture_return_value=True, replay=True)
 def get_board(project_id: int, db: Session = Depends(get_db)):
@@ -597,6 +665,8 @@ def get_board(project_id: int, db: Session = Depends(get_db)):
         result.append({"column": col, "cards": cards})
     return result
 
+# 엔드포인트: GET /projects/{project_id}/cards → get_project_cards.
+# 주입 의존성: Depends(get_db).
 @router.get("/projects/{project_id}/cards", response_model=List[CardResponse])
 @vectorize(search_description="Get all cards in project", capture_return_value=True, replay=True)
 def get_project_cards(project_id: int, db: Session = Depends(get_db)):
@@ -607,6 +677,10 @@ def get_project_cards(project_id: int, db: Session = Depends(get_db)):
 # 여기서부터 /cards/{card_id} 패턴 사용 (connections보다 아래에 있어야 함!)
 # -----------------------------------------------------------------
 
+# 엔드포인트: PATCH /cards/{card_id} → update_card.
+# 주입 의존성: Depends(get_db), Depends(get_current_user_id).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.patch("/cards/{card_id}", response_model=CardResponse)
 @vectorize(search_description="Update card", capture_return_value=True, replay=True)
 async def update_card(
@@ -641,6 +715,10 @@ async def update_card(
 
     return card
 
+# 엔드포인트: DELETE /cards/{card_id} → delete_card.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.delete("/cards/{card_id}")
 @vectorize(search_description="Delete card", capture_return_value=True)
 async def delete_card(
@@ -671,6 +749,10 @@ async def delete_card(
         )
     return {"message": "카드가 삭제되었습니다."}
 
+# 엔드포인트: POST /cards/{card_id}/files/{file_id} → attach_file_to_card.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.post("/cards/{card_id}/files/{file_id}", response_model=CardResponse)
 @vectorize(search_description="Attach file to card", capture_return_value=True, replay=True)
 async def attach_file_to_card(card_id: int, file_id: int, user_id: int = Depends(get_current_user_id), db: Session = Depends(get_db)):
@@ -702,6 +784,10 @@ async def attach_file_to_card(card_id: int, file_id: int, user_id: int = Depends
 
     return card
 
+# 엔드포인트: DELETE /cards/{card_id}/files/{file_id} → detach_file_from_card.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.delete("/cards/{card_id}/files/{file_id}")
 @vectorize(search_description="Detach file from card", capture_return_value=True, replay=True)
 async def detach_file_from_card(card_id: int, file_id: int, user_id: int = Depends(get_current_user_id), db: Session = Depends(get_db)):
@@ -732,6 +818,8 @@ async def detach_file_from_card(card_id: int, file_id: int, user_id: int = Depen
 
     return {"message": "파일 연결이 해제되었습니다."}
 
+# 엔드포인트: GET /cards/{card_id} → get_card.
+# 주입 의존성: Depends(get_db).
 @router.get("/cards/{card_id}", response_model=CardResponse)
 @vectorize(search_description="Get card details", capture_return_value=True, replay=True)
 def get_card(card_id: int, db: Session = Depends(get_db)):
@@ -739,6 +827,10 @@ def get_card(card_id: int, db: Session = Depends(get_db)):
     if not card: raise HTTPException(status_code=404, detail="카드를 찾을 수 없습니다.")
     return card
 
+# 엔드포인트: POST /cards/{card_id}/comments → create_comment.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.post("/cards/{card_id}/comments", response_model=CardCommentResponse)
 @vectorize(search_description="Add comment to card", capture_return_value=True)
 async def create_comment(card_id: int, comment_data: CardCommentCreate, user_id: int = Depends(get_current_user_id), db: Session = Depends(get_db)):
@@ -760,6 +852,8 @@ async def create_comment(card_id: int, comment_data: CardCommentCreate, user_id:
 
     return new_comment
 
+# 엔드포인트: GET /cards/{card_id}/comments → get_card_comments.
+# 주입 의존성: Depends(get_db).
 @router.get("/cards/{card_id}/comments", response_model=List[CardCommentResponse])
 def get_card_comments(card_id: int, db: Session = Depends(get_db)):
     comments = db.exec(select(CardComment).where(CardComment.card_id == card_id).order_by(CardComment.created_at.asc())).all()

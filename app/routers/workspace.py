@@ -1,3 +1,9 @@
+# [파일 안내] backend/app/routers/workspace.py
+# 팀·프로젝트·팀원·초대와 접속 상태 요청을 처리하는 FastAPI 라우터입니다.
+# 경로 접두사는 main.py의 include_router에서 붙습니다. 아래 데코레이터는 파일 내부 상대 경로이며 응답 DTO는 schemas.py에 있습니다.
+# 일반 흐름은 입력 검증 → 세션/대상 확인 → DB 조회/변경 → commit/refresh → 응답/실시간 알림입니다. 모든 함수가 같은 권한 검사를 하는 것은 아닙니다.
+# 현재 WS·파일 접근 등 권한 보강 과제가 남아 있습니다. Depends 존재 여부와 함수 본문의 팀원/소유자 검사를 모두 확인하세요.
+
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlmodel import Session, select
 from typing import List
@@ -13,7 +19,7 @@ from app.schemas import InvitationCreate, InvitationResponse, InvitationInfo
 from datetime import datetime, timedelta
 from typing import Any
 from app.utils.logger import log_activity
-from vectorwave import *
+from app.utils.vectorwave import vectorize
 from app.schemas import WorkspaceUpdate, ProjectUpdate
 from fastapi.concurrency import run_in_threadpool
 import asyncio
@@ -29,6 +35,8 @@ from fastapi import Cookie
 
 
 def get_current_user_id(session_id: str = Cookie(None), db: Session = Depends(get_db)):
+    # 인증의 신뢰 근거는 요청 body의 user_id가 아니라 쿠키와 DB 세션입니다.
+    # 쿠키 부재/세션 만료는 401이며, 이 함수만으로 특정 팀/프로젝트 접근 권한까지 확인하지는 않습니다.
     if not session_id:
         raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
 
@@ -38,6 +46,8 @@ def get_current_user_id(session_id: str = Cookie(None), db: Session = Depends(ge
 
     user = db.get(User, session.user_id)
     if user:
+        # 요청이 올 때 최근 활동 시각을 갱신하여 온라인 멤버 판정에 활용합니다.
+        # 조회 API에서도 이 의존성을 호출하면 DB 쓰기(commit)가 발생한다는 점에 주의합니다.
         user.last_active_at = datetime.now()
         db.add(user)
         db.commit()
@@ -46,6 +56,9 @@ def get_current_user_id(session_id: str = Cookie(None), db: Session = Depends(ge
 
 
 # 1. 워크스페이스 생성 (팀 만들기)
+# 엔드포인트: POST /workspaces → create_workspace.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.post("/workspaces", response_model=WorkspaceResponse)
 @vectorize(search_description="Create workspace", capture_return_value=True, replay=True)  # 👈 추가
 def create_workspace(
@@ -81,6 +94,8 @@ def create_workspace(
 
 
 # 2. 내 워크스페이스 목록 조회
+# 엔드포인트: GET /workspaces → get_my_workspaces.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
 @router.get("/workspaces", response_model=List[WorkspaceResponse])
 @vectorize(search_description="List my workspaces", capture_return_value=True, replay=True)  # 👈 추가
 def get_my_workspaces(
@@ -98,6 +113,10 @@ def get_my_workspaces(
 
 
 # 3. 프로젝트 생성 (워크스페이스 안에)
+# 엔드포인트: POST /workspaces/{workspace_id}/projects → create_project.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.post("/workspaces/{workspace_id}/projects", response_model=ProjectResponse)
 @vectorize(search_description="Create project", capture_return_value=True, replay=True)  # 👈 추가
 async def create_project(
@@ -138,6 +157,8 @@ async def create_project(
     return new_project
 
 
+# 엔드포인트: GET /workspaces/{workspace_id}/projects → get_workspace_projects.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
 @router.get("/workspaces/{workspace_id}/projects", response_model=List[ProjectResponse])
 @vectorize(search_description="List workspace projects", capture_return_value=True, replay=True)  # 👈 추가
 def get_workspace_projects(
@@ -158,6 +179,10 @@ def get_workspace_projects(
 # app/routers/workspace.py 맨 아래에 추가
 
 # 5. 워크스페이스에 팀원 초대 (이메일로 추가)
+# 엔드포인트: POST /workspaces/{workspace_id}/members → add_workspace_member.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.post("/workspaces/{workspace_id}/members")
 @vectorize(search_description="Add member manually", capture_return_value=True, replay=True)  # 👈 추가
 async def add_workspace_member(
@@ -216,6 +241,8 @@ async def add_workspace_member(
 # app/routers/workspace.py 맨 아래에 추가
 
 # 6. 워크스페이스 전체 멤버 목록 조회
+# 엔드포인트: GET /workspaces/{workspace_id}/members → get_workspace_members.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
 @router.get("/workspaces/{workspace_id}/members", response_model=List[WorkspaceMemberResponse])
 @vectorize(search_description="List workspace members", capture_return_value=True, replay=True)  # 👈 추가
 def get_workspace_members(
@@ -248,6 +275,8 @@ def get_workspace_members(
         ) for r in results
     ]
 
+# 엔드포인트: GET /workspaces/{workspace_id}/online-members/stream → stream_online_members.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
 @router.get("/workspaces/{workspace_id}/online-members/stream")
 @vectorize(search_description="Get online members", capture_return_value=True, replay=True)  # 👈 추가
 async def stream_online_members(
@@ -314,6 +343,9 @@ async def stream_online_members(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
+# 엔드포인트: POST /workspaces/{workspace_id}/invitations → create_invitation.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.post("/workspaces/{workspace_id}/invitations", response_model=InvitationResponse)
 @vectorize(search_description="Generate invitation link", capture_return_value=True, replay=True)  # 👈 추가
 def create_invitation(
@@ -350,6 +382,8 @@ def create_invitation(
     return InvitationResponse(invite_link=invite_link, expires_at=expires_at)
 
 
+# 엔드포인트: GET /invitations/{token} → get_invitation_info.
+# 주입 의존성: Depends(get_db).
 @router.get("/invitations/{token}", response_model=InvitationInfo)
 @vectorize(search_description="Get invitation info", capture_return_value=True)
 def get_invitation_info(
@@ -383,6 +417,10 @@ def get_invitation_info(
     )
 
 
+# 엔드포인트: POST /invitations/{token}/accept → accept_invitation.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.post("/invitations/{token}/accept")
 @vectorize(search_description="Accept invitation", capture_return_value=True, replay=True)  # 👈 추가
 async def accept_invitation(
@@ -446,6 +484,9 @@ async def accept_invitation(
 # 📡 워크스페이스 실시간 WebSocket
 # =================================================================
 
+# 엔드포인트: WEBSOCKET /ws/workspaces/{workspace_id} → workspace_events_endpoint.
+# 주입 의존성: 선언 없음; 함수 본문에서 별도 검증하는지 확인 필요.
+# 연결이 유지되는 동안 메시지를 반복 처리합니다. 종료/예외에서 연결 해제를 수행하고 클라이언트 식별값을 그대로 신뢰하지 않도록 주의합니다.
 @router.websocket("/ws/workspaces/{workspace_id}")
 async def workspace_events_endpoint(websocket: WebSocket, workspace_id: int, user_id: int = 0):
     # user_id를 query param으로 받음 (쿠키는 Secure 플래그로 인해 HTTP 환경에서 전달 안 됨)
@@ -468,6 +509,9 @@ async def workspace_events_endpoint(websocket: WebSocket, workspace_id: int, use
         workspace_event_manager.disconnect(websocket, workspace_id)
 
 
+# 엔드포인트: DELETE /workspaces/{workspace_id} → delete_workspace.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.delete("/workspaces/{workspace_id}")
 @vectorize(search_description="Delete workspace", capture_return_value=True)
 def delete_workspace(
@@ -488,6 +532,10 @@ def delete_workspace(
 
 
 # 2. 프로젝트 삭제
+# 엔드포인트: DELETE /projects/{project_id} → delete_project.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.delete("/projects/{project_id}")
 @vectorize(search_description="Delete project", capture_return_value=True)
 async def delete_project(
@@ -526,6 +574,10 @@ async def delete_project(
 
 
 # 3. 워크스페이스 멤버 삭제 (강퇴 또는 본인 탈퇴)
+# 엔드포인트: DELETE /workspaces/{workspace_id}/members/{target_user_id} → remove_workspace_member.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.delete("/workspaces/{workspace_id}/members/{target_user_id}")
 @vectorize(search_description="Remove workspace member", capture_return_value=True)  # 👈 추가
 async def remove_workspace_member(
@@ -586,6 +638,10 @@ async def remove_workspace_member(
     return {"message": f"멤버가 성공적으로 {action}처리 되었습니다."}
 
 
+# 엔드포인트: PATCH /workspaces/{workspace_id} → update_workspace.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.patch("/workspaces/{workspace_id}", response_model=WorkspaceResponse)
 @vectorize(search_description="Update workspace info", capture_return_value=True)
 async def update_workspace(
@@ -629,6 +685,9 @@ async def update_workspace(
 
 
 # 2. 프로젝트 정보 수정
+# 엔드포인트: PATCH /projects/{project_id} → update_project.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.patch("/projects/{project_id}", response_model=ProjectResponse)
 @vectorize(search_description="Update project info", capture_return_value=True)
 def update_project(

@@ -1,14 +1,25 @@
+# HTTP 라우팅·입력 검증·OpenAPI 문서 생성 프레임워크
 fastapi
+# FastAPI를 실행하는 ASGI 서버. standard는 개발 감시/웹소켓 등 부가 의존성을 포함합니다.
 uvicorn[standard]
+# Python 객체와 관계형 테이블을 연결하는 ORM/모델 계층
 sqlmodel
+# 현재 DATABASE_URL의 postgresql+psycopg2에서 사용하는 동기 PostgreSQL 드라이버
 psycopg2-binary
+# 비동기 PostgreSQL 드라이버. 현재 동기 Session 경로와 혼동하지 않습니다.
 asyncpg
+# multipart/form-data 파일 업로드/폼 입력 파싱
 python-multipart
+# 외부 HTTP 요청 및 선택 AI 서비스 연동 의존성
 requests
 openai
 weaviate-client>=4.0.0
-vectorwave
+# 선택 AI 인덱싱입니다. 대규모 Torch/CUDA 의존성을 설치할 수 있어 기본값에서 제외했습니다.
+# pip install vectorwave
+# 비밀번호 해싱. passlib과 함께 쓰는 기존 호환 버전을 유지합니다.
 bcrypt==3.2.0
+# 이메일 형식 검증과 SMTP 발송
 email-validator
 fastapi-mail
+# 실제 비밀번호 해싱/검증 호출은 app/routers/auth.py를 확인합니다.
 passlib[bcrypt]

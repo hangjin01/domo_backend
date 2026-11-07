@@ -1,3 +1,9 @@
+# [파일 안내] backend/app/utils/connection_manager.py
+# 실시간 연결을 프로젝트/팀/전역 범위로 보관하고 메시지를 fan-out하는 프로세스 내 관리자 모음입니다.
+# connect는 연결 등록, disconnect는 제거, broadcast는 해당 범위에 전달합니다. 전송 실패한 연결의 정리 방식도 확인합니다.
+# 연결 목록은 DB가 아닌 메모리입니다. 여러 프로세스/서버로 확장하면 Redis 등 공유 전달 계층 없이 서로 이벤트를 알 수 없습니다.
+# 관리자는 세션/팀 권한 검증의 대체물이 아닙니다. WS 라우터 진입 시 별도 검증이 필요합니다.
+
 from typing import List, Dict, Optional
 from fastapi import WebSocket
 import logging

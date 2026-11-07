@@ -1,13 +1,14 @@
 version: '3.8'
 
 services:
+  # Python HTTP/WS 서버입니다. DB 주소의 db는 아래 서비스 이름이며 localhost가 아닙니다.
   backend:
     build: .
     container_name: team_project_backend
     ports:
       - "9000:8000"
     environment:
-      - DATABASE_URL=postgresql://user:password@db:5432/project_db
+      - DATABASE_URL=postgresql+psycopg2://user:password@db:5432/project_db
       - WEAVIATE_HOST=weaviate
       - WEAVIATE_PORT=8080
       - WEAVIATE_GRPC_PORT=50051
@@ -19,15 +20,18 @@ services:
 
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     volumes:
-      - ./app:/app/app
-      - ./uploads:/app/uploads
+      # Fedora/Podman의 SELinux 환경에서도 컨테이너가 소스를 읽을 수 있도록 라벨을 공유한다.
+      - ./app:/app/app:Z
+      - ./uploads:/app/uploads:Z
     depends_on:
       - db
       - weaviate
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   db:
-    image: postgres:15-alpine
+    # 업무 데이터의 영속 저장소입니다. 컨테이너 중지와 데이터 볼륨 삭제는 다릅니다.
+    # Podman의 비대화식 실행에서도 이미지 출처를 확실히 알 수 있게 정식 경로를 사용한다.
+    image: docker.io/library/postgres:15-alpine
     container_name: team_project_db
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -39,7 +43,8 @@ services:
       - "5432:5432"
 
   weaviate:
-    image: semitechnologies/weaviate:latest
+    # 선택 AI 벡터 저장 서비스입니다. 컨테이너 실행만으로 VectorWave 기능이 활성화되지는 않습니다.
+    image: docker.io/semitechnologies/weaviate:latest
     container_name: team_project_weaviate
     ports:
       - "8080:8080"
@@ -55,5 +60,6 @@ services:
       - weaviate_data:/var/lib/weaviate
 
 volumes:
+  # named volume은 재시작 후에도 유지됩니다. 일반 종료에 down -v를 사용하지 마세요.
   postgres_data:
   weaviate_data:

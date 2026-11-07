@@ -1,3 +1,8 @@
+# [파일 안내] backend/app/main.py
+# FastAPI 앱의 조립 지점입니다. CORS, 업로드 정적 경로, 11개 라우터와 시작/종료 수명을 설정합니다.
+# 시작 시 SQLModel create_all을 실행하고 선택 설치된 VectorWave를 초기화합니다. create_all은 기존 테이블 변경을 적용하는 migration이 아닙니다.
+# 주의: 현재 wildcard CORS와 /static 공개 경로는 로컬 개발 설정입니다. /의 Healthy 응답은 모든 외부 서비스의 종합 건강 검사가 아닙니다.
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse

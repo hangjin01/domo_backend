@@ -1,3 +1,9 @@
+# [파일 안내] backend/app/routers/voice.py
+# 프로젝트 음성 연결용 WebRTC 시그널링 요청을 처리하는 FastAPI 라우터입니다.
+# 경로 접두사는 main.py의 include_router에서 붙습니다. 아래 데코레이터는 파일 내부 상대 경로이며 응답 DTO는 schemas.py에 있습니다.
+# 일반 흐름은 입력 검증 → 세션/대상 확인 → DB 조회/변경 → commit/refresh → 응답/실시간 알림입니다. 모든 함수가 같은 권한 검사를 하는 것은 아닙니다.
+# 현재 WS·파일 접근 등 권한 보강 과제가 남아 있습니다. Depends 존재 여부와 함수 본문의 팀원/소유자 검사를 모두 확인하세요.
+
 # app/routers/voice.py
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -56,6 +62,10 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+# 엔드포인트: WEBSOCKET /ws/projects/{project_id}/voice → voice_chat_endpoint.
+# 주입 의존성: 선언 없음; 함수 본문에서 별도 검증하는지 확인 필요.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
+# 연결이 유지되는 동안 메시지를 반복 처리합니다. 종료/예외에서 연결 해제를 수행하고 클라이언트 식별값을 그대로 신뢰하지 않도록 주의합니다.
 @router.websocket("/ws/projects/{project_id}/voice")
 async def voice_chat_endpoint(websocket: WebSocket, project_id: str):
     # 1. 쿼리 파라미터나 헤더 등에서 user_id를 가져오는 로직이 필요하지만,

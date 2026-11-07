@@ -1,3 +1,7 @@
+# [파일 안내] backend/app/utils/email.py
+# SMTP 설정과 인증 메일 발송을 모읍니다. 인증 코드의 저장/만료 판단은 인증 라우터의 책임입니다.
+# 환경변수는 로컬 placeholder일 수 있습니다. 함수 존재/서버 기동만으로 실제 메일 발송이 보장되지 않으며 비밀번호/코드를 로그에 남기지 않습니다.
+
 import os
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
 from pydantic import EmailStr

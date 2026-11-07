@@ -1,10 +1,16 @@
+# [파일 안내] backend/app/routers/auth.py
+# 학교 이메일 가입·인증과 쿠키 세션 로그인 요청을 처리하는 FastAPI 라우터입니다.
+# 경로 접두사는 main.py의 include_router에서 붙습니다. 아래 데코레이터는 파일 내부 상대 경로이며 응답 DTO는 schemas.py에 있습니다.
+# 일반 흐름은 입력 검증 → 세션/대상 확인 → DB 조회/변경 → commit/refresh → 응답/실시간 알림입니다. 모든 함수가 같은 권한 검사를 하는 것은 아닙니다.
+# 현재 WS·파일 접근 등 권한 보강 과제가 남아 있습니다. Depends 존재 여부와 함수 본문의 팀원/소유자 검사를 모두 확인하세요.
+
 import random
 import string
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Request, BackgroundTasks
 from sqlmodel import Session, select
 from datetime import datetime, timedelta
 import bcrypt
-from vectorwave import *
+from app.utils.vectorwave import vectorize
 
 from app.database import get_db
 from app.models.user import User
@@ -28,6 +34,9 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 def generate_code(length=6):
     return ''.join(random.choices(string.digits, k=length))
 
+# 엔드포인트: POST /auth/setup-admin → create_admin_account.
+# 주입 의존성: Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.post("/auth/setup-admin")
 def create_admin_account(db: Session = Depends(get_db)):
     """
@@ -83,6 +92,9 @@ def create_admin_account(db: Session = Depends(get_db)):
     }
 
 # --- 1. 회원가입 (1단계: 정보 등록 & 메일 발송) ---
+# 엔드포인트: POST /signup → signup.
+# 주입 의존성: Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.post("/signup", response_model=UserResponse)
 @vectorize(search_description="User signup request", capture_return_value=True, replay=True)
 async def signup(
@@ -123,6 +135,9 @@ async def signup(
     return new_user
 
 # --- 2. 이메일 인증 코드 확인 (2단계) ---
+# 엔드포인트: POST /verify → verify_email.
+# 주입 의존성: Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.post("/verify")
 @vectorize(search_description="Verify email code", capture_return_value=True, replay=True) # 👈 추가
 def verify_email(req: VerificationRequest, db: Session = Depends(get_db)):
@@ -147,6 +162,9 @@ def verify_email(req: VerificationRequest, db: Session = Depends(get_db)):
     return {"message": "이메일 인증이 완료되었습니다. 이제 로그인할 수 있습니다."}
 
 # --- 3. 로그인 API (인증 여부 체크 추가) ---
+# 엔드포인트: POST /login → login.
+# 주입 의존성: Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.post("/login")
 def login(response: Response, login_data: UserLogin, db: Session = Depends(get_db)):
     user = db.exec(select(User).where(User.email == login_data.email)).first()
@@ -178,6 +196,9 @@ def login(response: Response, login_data: UserLogin, db: Session = Depends(get_d
     return {"message": "로그인 성공", "user": {"email": user.email, "name": user.name}}
 
 # --- 4. 로그아웃 API ---
+# 엔드포인트: POST /logout → logout.
+# 주입 의존성: Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
 @router.post("/logout")
 @vectorize(search_description="User logout", capture_return_value=True, replay=True) # 👈 추가
 def logout(response: Response, request: Request, db: Session = Depends(get_db)):

@@ -1,3 +1,9 @@
+# [파일 안내] backend/app/routers/file.py
+# 파일 본체 업로드/다운로드와 DB 버전 메타데이터 요청을 처리하는 FastAPI 라우터입니다.
+# 경로 접두사는 main.py의 include_router에서 붙습니다. 아래 데코레이터는 파일 내부 상대 경로이며 응답 DTO는 schemas.py에 있습니다.
+# 일반 흐름은 입력 검증 → 세션/대상 확인 → DB 조회/변경 → commit/refresh → 응답/실시간 알림입니다. 모든 함수가 같은 권한 검사를 하는 것은 아닙니다.
+# 현재 WS·파일 접근 등 권한 보강 과제가 남아 있습니다. Depends 존재 여부와 함수 본문의 팀원/소유자 검사를 모두 확인하세요.
+
 # app/routers/file.py
 
 import os
@@ -18,7 +24,7 @@ from app.models.user import User
 from app.schemas import FileResponse as FileSchema, FileVersionResponse
 from app.utils.logger import log_activity
 from app.utils.connection_manager import board_event_manager
-from vectorwave import vectorize
+from app.utils.vectorwave import vectorize
 
 router = APIRouter(tags=["Files"])
 
@@ -28,6 +34,8 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # =================================================================
 # 📥 1. 파일 다운로드 (특정 버전) - [복구됨]
 # =================================================================
+# 엔드포인트: GET /files/download/{version_id} → download_file_version.
+# 주입 의존성: Depends(get_db).
 @router.get("/files/download/{version_id}")
 @vectorize(search_description="Download file version", capture_return_value=False)
 def download_file_version(version_id: int, db: Session = Depends(get_db)):
@@ -55,6 +63,8 @@ def download_file_version(version_id: int, db: Session = Depends(get_db)):
 # =================================================================
 # 📜 2. 파일 히스토리 조회 - [복구됨]
 # =================================================================
+# 엔드포인트: GET /files/{file_id}/versions → get_file_history.
+# 주입 의존성: Depends(get_db).
 @router.get("/files/{file_id}/versions", response_model=List[FileVersionResponse])
 @vectorize(search_description="Get file version history", capture_return_value=True)
 def get_file_history(
@@ -79,6 +89,10 @@ def get_file_history(
 # 📤 3. 파일 업로드 API (단건 & 배치)
 # =================================================================
 
+# 엔드포인트: POST /projects/{project_id}/files → upload_file.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.post("/projects/{project_id}/files", response_model=FileSchema)
 @vectorize(search_description="Upload file to project", capture_return_value=True, replay=True)
 async def upload_file(
@@ -177,6 +191,10 @@ async def upload_file(
 
     return response_data
 
+# 엔드포인트: POST /projects/{project_id}/files/batch → upload_files_batch.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.post("/projects/{project_id}/files/batch", response_model=List[FileSchema])
 @vectorize(search_description="Batch upload files", capture_return_value=True)
 async def upload_files_batch(
@@ -283,6 +301,8 @@ async def upload_files_batch(
     return results
 
 
+# 엔드포인트: GET /projects/{project_id}/files → get_project_files.
+# 주입 의존성: Depends(get_db).
 @router.get("/projects/{project_id}/files", response_model=List[FileSchema])
 @vectorize(search_description="List project files", capture_return_value=True)
 def get_project_files(
@@ -317,6 +337,10 @@ def get_project_files(
 
     return results
 
+# 엔드포인트: DELETE /files/{file_id} → delete_file.
+# 주입 의존성: Depends(get_current_user_id), Depends(get_db).
+# DB commit이 포함된 변경 요청입니다. 저장 전에 대상/권한을 확인하고, 실패 시 부분 저장 여부를 점검해야 합니다.
+# 연결된 클라이언트에 이벤트를 전파합니다. DB 영속화와 소켓 알림은 동일한 트랜잭션이 아닙니다.
 @router.delete("/files/{file_id}")
 @vectorize(search_description="Delete file", capture_return_value=True)
 async def delete_file(
